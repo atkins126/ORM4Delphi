@@ -2,50 +2,43 @@ unit Delphi.ORM.Classes.Loader;
 
 interface
 
-uses System.Rtti, System.Generics.Collections, Delphi.ORM.Database.Connection;
+uses System.Rtti, System.Generics.Collections, Delphi.ORM.Database.Connection, Delphi.ORM.Mapper;
 
 type
-  TFieldMapPair = TPair<TRttiProperty, String>;
-
-  IFieldXPropertyMapping = interface
-    ['{56BAD454-B3FF-4165-9C65-72D05499607E}']
-    function GetProperties: TArray<TFieldMapPair>;
-  end;
-
   TClassLoader = class
   private
-    function LoadClass<T: class, constructor>(Cursor: IDatabaseCursor; const Mapper: IFieldXPropertyMapping): T;
+    function LoadClass<T: class, constructor>(Cursor: IDatabaseCursor; const Fields: TArray<TField>): T;
   public
-    function Load<T: class, constructor>(Cursor: IDatabaseCursor; const Mapper: IFieldXPropertyMapping): T;
-    function LoadAll<T: class, constructor>(Cursor: IDatabaseCursor; const Mapper: IFieldXPropertyMapping): TArray<T>;
+    function Load<T: class, constructor>(Cursor: IDatabaseCursor; const Fields: TArray<TField>): T;
+    function LoadAll<T: class, constructor>(Cursor: IDatabaseCursor; const Fields: TArray<TField>): TArray<T>;
   end;
 
 implementation
 
 { TClassLoader }
 
-function TClassLoader.Load<T>(Cursor: IDatabaseCursor; const Mapper: IFieldXPropertyMapping): T;
+function TClassLoader.Load<T>(Cursor: IDatabaseCursor; const Fields: TArray<TField>): T;
 begin
   if Cursor.Next then
-    Result := LoadClass<T>(Cursor, Mapper)
+    Result := LoadClass<T>(Cursor, Fields)
   else
     Result := nil;
 end;
 
-function TClassLoader.LoadAll<T>(Cursor: IDatabaseCursor; const Mapper: IFieldXPropertyMapping): TArray<T>;
+function TClassLoader.LoadAll<T>(Cursor: IDatabaseCursor; const Fields: TArray<TField>): TArray<T>;
 begin
   Result := nil;
 
   while Cursor.Next do
-    Result := Result + [LoadClass<T>(Cursor, Mapper)];
+    Result := Result + [LoadClass<T>(Cursor, Fields)];
 end;
 
-function TClassLoader.LoadClass<T>(Cursor: IDatabaseCursor; const Mapper: IFieldXPropertyMapping): T;
+function TClassLoader.LoadClass<T>(Cursor: IDatabaseCursor; const Fields: TArray<TField>): T;
 begin
   Result := T.Create;
 
-  for var Map in Mapper.GetProperties do
-    Map.Key.SetValue(TObject(Result), Cursor.GetFieldValue(Map.Value));
+  for var A := Low(Fields) to High(Fields) do
+    Fields[A].TypeInfo.SetValue(TObject(Result), Cursor.GetFieldValue(A));
 end;
 
 end.
