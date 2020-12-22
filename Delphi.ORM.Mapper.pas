@@ -8,6 +8,7 @@ type
   EClassWithoutPrimaryKeyDefined = class(Exception);
   TField = class;
   TForeignKey = class;
+  TManyValueAssociation = class;
 
   TTable = class
   private
@@ -16,6 +17,7 @@ type
     FFields: TArray<TField>;
     FTypeInfo: TRttiInstanceType;
     FDatabaseName: String;
+    FManyValueAssociations: TArray<TManyValueAssociation>;
   public
     constructor Create(TypeInfo: TRttiInstanceType);
 
@@ -24,6 +26,7 @@ type
     property DatabaseName: String read FDatabaseName write FDatabaseName;
     property Fields: TArray<TField> read FFields;
     property ForeignKeys: TArray<TForeignKey> read FForeignKeys;
+    property ManyValueAssociations: TArray<TManyValueAssociation> read FManyValueAssociations write FManyValueAssociations;
     property PrimaryKey: TArray<TField> read FPrimaryKey;
     property TypeInfo: TRttiInstanceType read FTypeInfo;
   end;
@@ -39,6 +42,17 @@ type
     property TypeInfo: TRttiInstanceProperty read FTypeInfo;
   end;
 
+  TFieldAlias = record
+  private
+    FTableAlias: String;
+    FField: TField;
+  public
+    constructor Create(TableAlias: String; Field: TField);
+
+    property Field: TField read FField write FField;
+    property TableAlias: String read FTableAlias write FTableAlias;
+  end;
+
   TForeignKey = class
   private
     FParentTable: TTable;
@@ -50,6 +64,19 @@ type
     property ParentTable: TTable read FParentTable;
   end;
 
+  TManyValueAssociation = class
+  private
+    FChildTable: TTable;
+    FChildField: TField;
+    FField: TField;
+  public
+    constructor Create(Field: TField; ChildTable: TTable; ChildField: TField);
+
+    property Field: TField read FField write FField;
+    property ChildField: TField read FChildField write FChildField;
+    property ChildTable: TTable read FChildTable write FChildTable;
+  end;
+
   TMapper = class
   private
     class var [Unsafe] FDefault: TMapper;
@@ -59,6 +86,7 @@ type
   private
     FContext: TRttiContext;
     FTables: TDictionary<TRttiInstanceType, TTable>;
+    FLateLoadTables: TList<TTable>;
 
     function CheckAttribute<T: TCustomAttribute>(TypeInfo: TRttiType): Boolean;
     function GetFieldName(TypeInfo: TRttiInstanceProperty): String;
@@ -66,17 +94,22 @@ type
     function GetPrimaryKey(TypeInfo: TRttiInstanceType): TArray<String>;
     function GetTableName(TypeInfo: TRttiInstanceType): String;
     function GetTables: TArray<TTable>;
+    function LoadClassInTable(TypeInfo: TRttiInstanceType): TTable;
     function LoadTable(TypeInfo: TRttiInstanceType): TTable;
 
     procedure LoadTableFields(TypeInfo: TRttiInstanceType; var Table: TTable);
     procedure LoadTableForeignKeys(var Table: TTable);
     procedure LoadTableInfo(TypeInfo: TRttiInstanceType; var Table: TTable);
+    procedure LoadTableManyValueAssociations(Table: TTable);
   public
     constructor Create;
 
     destructor Destroy; override;
 
-    function FindOrLoadTable(ClassInfo: TClass): TTable;
+    class function IsForeignKey(Field: TField): Boolean;
+    class function IsJoinLink(Field: TField): Boolean;
+    class function IsManyValueAssociation(Field: TField): Boolean;
+
     function FindTable(ClassInfo: TClass): TTable;
     function LoadClass(ClassInfo: TClass): TTable;
 
@@ -110,27 +143,22 @@ end;
 constructor TMapper.Create;
 begin
   FContext := TRttiContext.Create;
+  FLateLoadTables := TList<TTable>.Create;
   FTables := TObjectDictionary<TRttiInstanceType, TTable>.Create([doOwnsValues]);
 end;
 
 destructor TMapper.Destroy;
 begin
+  FLateLoadTables.Free;
+
   FTables.Free;
 
   FContext.Free;
 end;
 
-function TMapper.FindOrLoadTable(ClassInfo: TClass): TTable;
-begin
-  Result := FindTable(ClassInfo);
-
-  if not Assigned(Result) then
-    Result := LoadClass(ClassInfo);
-end;
-
 function TMapper.FindTable(ClassInfo: TClass): TTable;
 begin
-  if not FTables.TryGetValue(FContext.GetType(ClassInfo) as TRttiInstanceType, Result) then
+  if not FTables.TryGetValue(FContext.GetType(ClassInfo).AsInstance, Result) then
     Result := nil;
 end;
 
@@ -175,6 +203,21 @@ begin
   Result := FTables.Values.ToArray;
 end;
 
+class function TMapper.IsForeignKey(Field: TField): Boolean;
+begin
+  Result := Field.TypeInfo.PropertyType.IsInstance;
+end;
+
+class function TMapper.IsJoinLink(Field: TField): Boolean;
+begin
+  Result := IsForeignKey(Field) or IsManyValueAssociation(Field);
+end;
+
+class function TMapper.IsManyValueAssociation(Field: TField): Boolean;
+begin
+  Result := Field.TypeInfo.PropertyType.IsArray;
+end;
+
 class destructor TMapper.Destroy;
 begin
   FDefault.Free;
@@ -186,12 +229,22 @@ begin
 
   for var TypeInfo in FContext.GetTypes do
     if CheckAttribute<EntityAttribute>(TypeInfo) then
-      LoadTable(TypeInfo as TRttiInstanceType);
+      LoadClassInTable(TypeInfo.AsInstance);
 end;
 
 function TMapper.LoadClass(ClassInfo: TClass): TTable;
 begin
-  Result := LoadTable(FContext.GetType(ClassInfo) as TRttiInstanceType);
+  Result := LoadClassInTable(FContext.GetType(ClassInfo).AsInstance);
+end;
+
+function TMapper.LoadClassInTable(TypeInfo: TRttiInstanceType): TTable;
+begin
+  Result := LoadTable(TypeInfo);
+
+  for var Table in FLateLoadTables do
+    LoadTableManyValueAssociations(Table);
+
+  FLateLoadTables.Clear;
 end;
 
 function TMapper.LoadTable(TypeInfo: TRttiInstanceType): TTable;
@@ -204,6 +257,8 @@ begin
     Result.DatabaseName := GetTableName(TypeInfo);
 
     FTables.Add(TypeInfo, Result);
+
+    FLateLoadTables.Add(Result);
 
     LoadTableInfo(TypeInfo, Result);
   end;
@@ -224,9 +279,9 @@ end;
 procedure TMapper.LoadTableForeignKeys(var Table: TTable);
 begin
   for var Field in Table.Fields do
-    if Field.TypeInfo.PropertyType.IsInstance then
+    if IsForeignKey(Field) then
     begin
-      var ForeignTable := FindOrLoadTable((Field.TypeInfo.PropertyType as TRttiInstanceType).MetaclassType);
+      var ForeignTable := LoadTable(Field.TypeInfo.PropertyType.AsInstance);
 
       if Length(ForeignTable.PrimaryKey) = 0 then
         raise EClassWithoutPrimaryKeyDefined.CreateFmt('You must define a primary key for class %s!', [ForeignTable.TypeInfo.Name]);
@@ -267,6 +322,19 @@ begin
   LoadTableForeignKeys(Table);
 end;
 
+procedure TMapper.LoadTableManyValueAssociations(Table: TTable);
+begin
+  for var Field in Table.Fields do
+    if IsManyValueAssociation(Field) then
+    begin
+      var ChildTable := LoadTable(Field.TypeInfo.PropertyType.AsArray.ElementType.AsInstance);
+
+      for var ForeignKey in ChildTable.ForeignKeys do
+        if ForeignKey.ParentTable = Table then
+          Table.FManyValueAssociations := Table.FManyValueAssociations + [TManyValueAssociation.Create(Field, ChildTable, ForeignKey.Field)];
+    end;
+end;
+
 { TTable }
 
 constructor TTable.Create(TypeInfo: TRttiInstanceType);
@@ -284,6 +352,9 @@ begin
   for var ForeignKey in ForeignKeys do
     ForeignKey.Free;
 
+  for var ManyValueAssociation in ManyValueAssociations do
+    ManyValueAssociation.Free;
+
   inherited;
 end;
 
@@ -294,6 +365,25 @@ begin
   inherited Create;
 
   FParentTable := ParentTable;
+  FField := Field;
+end;
+
+{ TFieldAlias }
+
+constructor TFieldAlias.Create(TableAlias: String; Field: TField);
+begin
+  FField := Field;
+  FTableAlias := TableAlias;
+end;
+
+{ TManyValueAssociation }
+
+constructor TManyValueAssociation.Create(Field: TField; ChildTable: TTable; ChildField: TField);
+begin
+  inherited Create;
+
+  FChildField := ChildField;
+  FChildTable := ChildTable;
   FField := Field;
 end;
 

@@ -6,7 +6,7 @@ uses System.Rtti, DUnitX.TestFramework, Delphi.ORM.Attributes;
 
 type
   [TestFixture]
-  TMapperTeste = class
+  TMapperTest = class
   private
     FContext: TRttiContext;
   public
@@ -79,11 +79,19 @@ type
     [Test]
     procedure WhenTheClassIsInheritedMustShareTheSamePrimaryKeyFromTheBaseClass;
     [Test]
-    procedure WhenCantFindTheClassHaveToLoadTheClass;
-    [Test]
     procedure WhenTheForeignKeyIsAClassAliasMustLoadTheForeignClassAndLinkToForeignKey;
     [Test]
     procedure WhenLoadMoreThenOneTimeTheSameClassCantRaiseAnError;
+    [Test]
+    procedure WhenAPropertyIsAnArrayMustLoadAManyValueLink;
+    [Test]
+    procedure TheTableOfManyValueAssociationMustBeTheChildTableOfThisLink;
+    [Test]
+    procedure TheFieldLinkingTheParentAndChildOfManyValueAssociationMustBeLoaded;
+    [Test]
+    procedure WhenTheChildClassIsDeclaredBeforeTheParentClassTheLinkBetweenOfTablesMustBeCreated;
+    [Test]
+    procedure TheManyValueAssociationMustLoadTheFieldThatGeneratedTheValue;
   end;
 
   [Entity]
@@ -254,13 +262,35 @@ type
     property Id: Integer read FId write FId;
   end;
 
+  TMyEntityWithManyValueAssociation = class;
+
+  [Entity]
+  TMyEntityWithManyValueAssociationChild = class
+  private
+    FId: Integer;
+    FManyValueAssociation: TMyEntityWithManyValueAssociation;
+  published
+    property Id: Integer read FId write FId;
+    property ManyValueAssociation: TMyEntityWithManyValueAssociation read FManyValueAssociation write FManyValueAssociation;
+  end;
+
+  [Entity]
+  TMyEntityWithManyValueAssociation = class
+  private
+    FId: Integer;
+    FManyValueAssociation: TArray<TMyEntityWithManyValueAssociationChild>;
+  published
+    property Id: Integer read FId write FId;
+    property ManyValueAssociation: TArray<TMyEntityWithManyValueAssociationChild> read FManyValueAssociation write FManyValueAssociation;
+  end;
+
 implementation
 
 uses Delphi.ORM.Mapper;
 
-{ TMapperTeste }
+{ TMapperTest }
 
-procedure TMapperTeste.EveryPropertyThatIsAnObjectMustCreateAForeignKeyInTheListOfTheTable;
+procedure TMapperTest.EveryPropertyThatIsAnObjectMustCreateAForeignKeyInTheListOfTheTable;
 begin
   var Mapper := TMapper.Create;
 
@@ -273,7 +303,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.OnlyPublishedFieldMutsBeLoadedInTheTable;
+procedure TMapperTest.OnlyPublishedFieldMutsBeLoadedInTheTable;
 begin
   var Mapper := TMapper.Create;
 
@@ -286,7 +316,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.Setup;
+procedure TMapperTest.Setup;
 begin
   var Mapper := TMapper.Create;
 
@@ -297,7 +327,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.TheClassWithTheSingleTableInheritanceAttributeCantBeMappedInTheTableList;
+procedure TMapperTest.TheClassWithTheSingleTableInheritanceAttributeCantBeMappedInTheTableList;
 begin
   var Mapper := TMapper.Create;
 
@@ -308,7 +338,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.TheDatabaseNameOfATableMustBeTheNameOfClassRemovingTheFirstCharOfTheClassName;
+procedure TMapperTest.TheDatabaseNameOfATableMustBeTheNameOfClassRemovingTheFirstCharOfTheClassName;
 begin
   var Mapper := TMapper.Create;
   var Table := Mapper.LoadClass(TMyEntity);
@@ -318,7 +348,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.TheFieldInPrimaryKeyMustBeMarkedWithInPrimaryKey;
+procedure TMapperTest.TheFieldInPrimaryKeyMustBeMarkedWithInPrimaryKey;
 begin
   var Mapper := TMapper.Create;
   var Table := Mapper.LoadClass(TMyEntity);
@@ -328,7 +358,21 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.TheFieldOfAForeignKeyMustBeFilledWithTheFieldOfTheClassThatIsAForeignKey;
+procedure TMapperTest.TheFieldLinkingTheParentAndChildOfManyValueAssociationMustBeLoaded;
+begin
+  var Mapper := TMapper.Create;
+
+  Mapper.LoadAll;
+
+  var ChildTable := Mapper.FindTable(TMyEntityWithManyValueAssociationChild);
+  var Table := Mapper.FindTable(TMyEntityWithManyValueAssociation);
+
+  Assert.AreEqual(ChildTable.Fields[1], Table.ManyValueAssociations[0].ChildField);
+
+  Mapper.Free;
+end;
+
+procedure TMapperTest.TheFieldOfAForeignKeyMustBeFilledWithTheFieldOfTheClassThatIsAForeignKey;
 begin
   var Mapper := TMapper.Create;
 
@@ -341,7 +385,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.TheLoadingOfForeingKeyMustBeAfterAllTablesAreLoadedToTheFindTableWorksPropertily;
+procedure TMapperTest.TheLoadingOfForeingKeyMustBeAfterAllTablesAreLoadedToTheFindTableWorksPropertily;
 begin
   var Mapper := TMapper.Create;
 
@@ -354,7 +398,20 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.TheParentTableMustBeTheTableLinkedToTheField;
+procedure TMapperTest.TheManyValueAssociationMustLoadTheFieldThatGeneratedTheValue;
+begin
+  var Mapper := TMapper.Create;
+
+  Mapper.LoadAll;
+
+  var Table := Mapper.FindTable(TMyEntityWithManyValueAssociation);
+
+  Assert.AreEqual(Table.Fields[1], Table.ManyValueAssociations[0].Field);
+
+  Mapper.Free;
+end;
+
+procedure TMapperTest.TheParentTableMustBeTheTableLinkedToTheField;
 begin
   var Mapper := TMapper.Create;
 
@@ -368,7 +425,21 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenAClassDoesNotHaveThePrimaryKeyAttributeAndHasAnIdFieldThisWillBeThePrimaryKey;
+procedure TMapperTest.TheTableOfManyValueAssociationMustBeTheChildTableOfThisLink;
+begin
+  var Mapper := TMapper.Create;
+
+  Mapper.LoadAll;
+
+  var ChildTable := Mapper.FindTable(TMyEntityWithManyValueAssociationChild);
+  var Table := Mapper.FindTable(TMyEntityWithManyValueAssociation);
+
+  Assert.AreEqual(ChildTable, Table.ManyValueAssociations[0].ChildTable);
+
+  Mapper.Free;
+end;
+
+procedure TMapperTest.WhenAClassDoesNotHaveThePrimaryKeyAttributeAndHasAnIdFieldThisWillBeThePrimaryKey;
 begin
   var Mapper := TMapper.Create;
   var Table := Mapper.LoadClass(TMyEntity2);
@@ -379,7 +450,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenAClassIsInheritedFromAClassWithTheSingleTableInheritanceAttributeCantGenerateAnyForeignKey;
+procedure TMapperTest.WhenAClassIsInheritedFromAClassWithTheSingleTableInheritanceAttributeCantGenerateAnyForeignKey;
 begin
   var Mapper := TMapper.Create;
 
@@ -390,7 +461,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenAClassIsInheritedFromAClassWithTheSingleTableInheritanceAttributeMustLoadAllFieldsInTheTable;
+procedure TMapperTest.WhenAClassIsInheritedFromAClassWithTheSingleTableInheritanceAttributeMustLoadAllFieldsInTheTable;
 begin
   var Mapper := TMapper.Create;
 
@@ -401,7 +472,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenAClassIsInheritedFromAClassWithTheSingleTableInheritanceAttributeThePrimaryKeyMustBeLoadedFromTheTopClass;
+procedure TMapperTest.WhenAClassIsInheritedFromAClassWithTheSingleTableInheritanceAttributeThePrimaryKeyMustBeLoadedFromTheTopClass;
 begin
   var Mapper := TMapper.Create;
 
@@ -414,7 +485,18 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenCallLoadAllMoreThemOneTimeCantRaiseAnError;
+procedure TMapperTest.WhenAPropertyIsAnArrayMustLoadAManyValueLink;
+begin
+  var Mapper := TMapper.Create;
+
+  var Table := Mapper.LoadClass(TMyEntityWithManyValueAssociation);
+
+  Assert.AreEqual<Integer>(1, Length(Table.ManyValueAssociations));
+
+  Mapper.Free;
+end;
+
+procedure TMapperTest.WhenCallLoadAllMoreThemOneTimeCantRaiseAnError;
 begin
   var Mapper := TMapper.Create;
 
@@ -425,7 +507,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenCallLoadAllMustLoadAllClassesWithTheEntityAttribute;
+procedure TMapperTest.WhenCallLoadAllMustLoadAllClassesWithTheEntityAttribute;
 begin
   var Mapper := TMapper.Create;
 
@@ -436,24 +518,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenCantFindTheClassHaveToLoadTheClass;
-begin
-  var Mapper := TMapper.Create;
-
-  var Table := Mapper.FindTable(TMyEntity);
-
-  Assert.IsNull(Table);
-
-  Mapper.FindOrLoadTable(TMyEntity);
-
-  Table := Mapper.FindTable(TMyEntity);
-
-  Assert.IsNotNull(Table);
-
-  Mapper.Free;
-end;
-
-procedure TMapperTeste.WhenLoadAClassMustKeepTheOrderingOfTablesToTheFindTableContinueToWorking;
+procedure TMapperTest.WhenLoadAClassMustKeepTheOrderingOfTablesToTheFindTableContinueToWorking;
 begin
   var Mapper := TMapper.Create;
 
@@ -470,7 +535,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenLoadAFieldMustFillThePropertyWithThePropertyInfo;
+procedure TMapperTest.WhenLoadAFieldMustFillThePropertyWithThePropertyInfo;
 begin
   var Mapper := TMapper.Create;
   var Table := Mapper.LoadClass(TMyEntity3);
@@ -481,7 +546,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenLoadATableMustLoadAllFieldsToo;
+procedure TMapperTest.WhenLoadATableMustLoadAllFieldsToo;
 begin
   var Mapper := TMapper.Create;
 
@@ -494,7 +559,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenLoadMoreThenOneTimeTheSameClassCantRaiseAnError;
+procedure TMapperTest.WhenLoadMoreThenOneTimeTheSameClassCantRaiseAnError;
 begin
   var Mapper := TMapper.Create;
 
@@ -509,7 +574,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenMapAForeignKeyIsToAClassWithoutAPrimaryKeyMustRaiseAnError;
+procedure TMapperTest.WhenMapAForeignKeyIsToAClassWithoutAPrimaryKeyMustRaiseAnError;
 begin
   var Mapper := TMapper.Create;
 
@@ -524,7 +589,20 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheClassHaveThePrimaryKeyAttributeThePrimaryKeyWillBeTheFieldFilled;
+procedure TMapperTest.WhenTheChildClassIsDeclaredBeforeTheParentClassTheLinkBetweenOfTablesMustBeCreated;
+begin
+  var Mapper := TMapper.Create;
+
+  Mapper.LoadAll;
+
+  var Table := Mapper.FindTable(TMyEntityWithManyValueAssociation);
+
+  Assert.AreEqual<Integer>(1, Length(Table.ManyValueAssociations));
+
+  Mapper.Free;
+end;
+
+procedure TMapperTest.WhenTheClassHaveThePrimaryKeyAttributeThePrimaryKeyWillBeTheFieldFilled;
 begin
   var Mapper := TMapper.Create;
   var Table := Mapper.LoadClass(TMyEntityWithPrimaryKey);
@@ -534,7 +612,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheClassHaveTheTableNameAttributeTheDatabaseNameMustBeLikeTheNameInAttribute;
+procedure TMapperTest.WhenTheClassHaveTheTableNameAttributeTheDatabaseNameMustBeLikeTheNameInAttribute;
 begin
   var Mapper := TMapper.Create;
   var Table := Mapper.LoadClass(TMyEntity2);
@@ -544,7 +622,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheClassIsInheritedFromANormalClassCantLoadFieldsFormTheBaseClass;
+procedure TMapperTest.WhenTheClassIsInheritedFromANormalClassCantLoadFieldsFormTheBaseClass;
 begin
   var Mapper := TMapper.Create;
 
@@ -555,7 +633,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheClassIsInheritedFromANormalClassMustCreateAForeignKeyForTheBaseClass;
+procedure TMapperTest.WhenTheClassIsInheritedFromANormalClassMustCreateAForeignKeyForTheBaseClass;
 begin
   var Mapper := TMapper.Create;
 
@@ -566,7 +644,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheClassIsInheritedFromANormalClassMustCreateAForeignKeyForTheBaseClassWithThePrimaryKeyFields;
+procedure TMapperTest.WhenTheClassIsInheritedFromANormalClassMustCreateAForeignKeyForTheBaseClassWithThePrimaryKeyFields;
 begin
   var Mapper := TMapper.Create;
 
@@ -582,7 +660,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheClassIsInheritedFromTObjectCantCreateAForeignKeyForThatClass;
+procedure TMapperTest.WhenTheClassIsInheritedFromTObjectCantCreateAForeignKeyForThatClass;
 begin
   var Mapper := TMapper.Create;
 
@@ -593,7 +671,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheClassIsInheritedMustLoadThePrimaryKeyFromBaseClass;
+procedure TMapperTest.WhenTheClassIsInheritedMustLoadThePrimaryKeyFromBaseClass;
 begin
   var Mapper := TMapper.Create;
 
@@ -606,7 +684,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheClassIsInheritedMustShareTheSamePrimaryKeyFromTheBaseClass;
+procedure TMapperTest.WhenTheClassIsInheritedMustShareTheSamePrimaryKeyFromTheBaseClass;
 begin
   var Mapper := TMapper.Create;
 
@@ -620,7 +698,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheFieldHaveTheFieldNameAttributeMustLoadThisNameInTheDatabaseName;
+procedure TMapperTest.WhenTheFieldHaveTheFieldNameAttributeMustLoadThisNameInTheDatabaseName;
 begin
   var Mapper := TMapper.Create;
 
@@ -633,7 +711,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheFieldIsAClassMustFillTheDatabaseNameWithIdPlusPropertyName;
+procedure TMapperTest.WhenTheFieldIsAClassMustFillTheDatabaseNameWithIdPlusPropertyName;
 begin
   var Mapper := TMapper.Create;
 
@@ -646,7 +724,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheFieldsAreLoadedMustFillTheNameWithTheNameOfPropertyOfTheClass;
+procedure TMapperTest.WhenTheFieldsAreLoadedMustFillTheNameWithTheNameOfPropertyOfTheClass;
 begin
   var Mapper := TMapper.Create;
   var Table := Mapper.LoadClass(TMyEntity3);
@@ -656,7 +734,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheForeignKeyIsAClassAliasMustLoadTheForeignClassAndLinkToForeignKey;
+procedure TMapperTest.WhenTheForeignKeyIsAClassAliasMustLoadTheForeignClassAndLinkToForeignKey;
 begin
   var Mapper := TMapper.Create;
 
@@ -667,7 +745,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTheForeignKeyIsCreatesMustLoadTheParentTable;
+procedure TMapperTest.WhenTheForeignKeyIsCreatesMustLoadTheParentTable;
 begin
   var Mapper := TMapper.Create;
 
@@ -680,7 +758,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenThePrimaryKeyAttributeHasMoreThanOneFieldHasToPutEveryoneOnTheList;
+procedure TMapperTest.WhenThePrimaryKeyAttributeHasMoreThanOneFieldHasToPutEveryoneOnTheList;
 begin
   var Mapper := TMapper.Create;
   var Table := Mapper.LoadClass(TMyEntityWithPrimaryKey2);
@@ -690,7 +768,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTryToFindATableMustReturnTheTableOfTheClass;
+procedure TMapperTest.WhenTryToFindATableMustReturnTheTableOfTheClass;
 begin
   var Mapper := TMapper.Create;
   var Table := Mapper.LoadClass(TMyEntity3);
@@ -700,7 +778,7 @@ begin
   Mapper.Free;
 end;
 
-procedure TMapperTeste.WhenTryToFindATableWithoutTheEntityAttributeMustReturnANilValue;
+procedure TMapperTest.WhenTryToFindATableWithoutTheEntityAttributeMustReturnANilValue;
 begin
   var Mapper := TMapper.Create;
 

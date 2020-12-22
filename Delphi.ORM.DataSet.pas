@@ -52,11 +52,7 @@ type
     function GetRecordCount: Integer; override;
     function IsCursorOpen: Boolean; override;
 
-    {$IFDEF PAS2JS}
-    procedure GetBookmarkData(Buffer: TDataRecord; var Data: TBookmark); override;
-    {$ELSE}
-    procedure GetBookmarkData(Buffer: TRecBuf; Data: TBookmark); override;
-    {$ENDIF}
+    procedure GetBookmarkData(Buffer: TRecordBuffer; {$IFDEF PAS2JS}var {$ENDIF}Data: TBookmark); override;
     procedure FreeRecordBuffer(var Buffer: TRecordBuffer); override;
     procedure InternalClose; override;
     procedure InternalFirst; override;
@@ -149,16 +145,12 @@ begin
 {$ENDIF}
 end;
 
-{$IFDEF PAS2JS}
-procedure TORMDataSet.GetBookmarkData(Buffer: TDataRecord; var Data: TBookmark);
+procedure TORMDataSet.GetBookmarkData(Buffer: TRecordBuffer; {$IFDEF PAS2JS}var {$ENDIF}Data: TBookmark);
 begin
-end;
-{$ELSE}
-procedure TORMDataSet.GetBookmarkData(Buffer: TRecBuf; Data: TBookmark);
-begin
-  PInteger(Data)^ := GetCurrentRecordFromBuffer(TRecordBuffer(Buffer));
-end;
+{$IFDEF DCC}
+  PInteger(Data)^ := GetCurrentRecordFromBuffer(Buffer);
 {$ENDIF}
+end;
 
 function TORMDataSet.GetActiveCurrentRecord: Integer;
 begin
@@ -412,7 +404,7 @@ end;
 
 function TORMDataSet.IsCursorOpen: Boolean;
 begin
-  Result := Assigned(FObjectList) and (ObjectList.Count > 0);
+  Result := Assigned(FObjectList);
 end;
 
 procedure TORMDataSet.LoadFieldDefsFromClass;
@@ -479,9 +471,9 @@ end;
 
 procedure TORMDataSet.OpenClass<T>;
 begin
-  SetObjectType(TypeInfo(T));
+  FInternalList := TList<TObject>(TList<T>.Create);
 
-  Open;
+  OpenList<T>(TList<T>(FInternalList));
 end;
 
 procedure TORMDataSet.OpenList<T>(List: {$IFDEF PAS2JS}TObject{$ELSE}TList<T>{$ENDIF});
