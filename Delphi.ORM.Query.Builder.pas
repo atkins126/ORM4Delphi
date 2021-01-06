@@ -2,7 +2,7 @@ unit Delphi.ORM.Query.Builder;
 
 interface
 
-uses System.Rtti, System.Classes, System.Generics.Collections, Delphi.ORM.Database.Connection, Delphi.ORM.Mapper;
+uses System.Rtti, System.Classes, System.Generics.Collections, System.SysUtils, Delphi.ORM.Database.Connection, Delphi.ORM.Mapper;
 
 type
   TQueryBuilder = class;
@@ -11,7 +11,7 @@ type
   TQueryBuilderSelect = class;
   TQueryBuilderWhere<T: class> = class;
 
-  TFilterOperation = (Equal);
+  EInvalidTypeValue = class(Exception);
 
   TQueryBuilderCommand = class
     function GetSQL: String; virtual; abstract;
@@ -27,7 +27,6 @@ type
     FCommand: TQueryBuilderCommand;
 
     function GetConnection: IDatabaseConnection;
-    function GetValueString(const Value: TValue): String;
   public
     constructor Create(Connection: IDatabaseConnection);
 
@@ -149,7 +148,8 @@ type
     class operator Equal(const Condition: TQueryBuilderCondition; const Value: String): TQueryBuilderCondition;
     class operator Equal(const Condition: TQueryBuilderCondition; const Value: TValue): TQueryBuilderCondition;
     class operator Equal(const Condition: TQueryBuilderCondition; const Value: Variant): TQueryBuilderCondition;
-    class operator Equal(const Condition: TQueryBuilderCondition; const Value: TQueryBuilderCondition): TQueryBuilderCondition;
+    class operator Equal(const Condition: TQueryBuilderCondition; const Value: TObject): TQueryBuilderCondition;
+    class operator Equal(const Condition, Value: TQueryBuilderCondition): TQueryBuilderCondition;
     class operator GreaterThan(const Condition: TQueryBuilderCondition; const Value: Extended): TQueryBuilderCondition;
     class operator GreaterThan(const Condition: TQueryBuilderCondition; const Value: String): TQueryBuilderCondition;
     class operator GreaterThan(const Condition, Value: TQueryBuilderCondition): TQueryBuilderCondition;
@@ -166,6 +166,7 @@ type
     class operator NotEqual(const Condition: TQueryBuilderCondition; const Value: String): TQueryBuilderCondition;
     class operator NotEqual(const Condition: TQueryBuilderCondition; const Value: Variant): TQueryBuilderCondition;
     class operator NotEqual(const Condition: TQueryBuilderCondition; const Value: TValue): TQueryBuilderCondition;
+    class operator NotEqual(const Condition: TQueryBuilderCondition; const Value: TObject): TQueryBuilderCondition;
     class operator NotEqual(const Condition, Value: TQueryBuilderCondition): TQueryBuilderCondition;
   end;
 
@@ -185,17 +186,42 @@ type
   end;
 
 function Field(const Name: String): TQueryBuilderCondition;
+function GetValueString(const Value: TValue): String;
 
 const
   OPERATOR_CHAR: array[TQueryBuilderOperator] of String = ('=', '<>', '>', '>=', '<', '<=', ' and ', ' or ');
 
 implementation
 
-uses System.SysUtils, System.TypInfo, System.Variants, Delphi.ORM.Attributes, Delphi.ORM.Rtti.Helper, Delphi.ORM.Classes.Loader;
+uses System.TypInfo, System.Variants, Delphi.ORM.Attributes, Delphi.ORM.Rtti.Helper, Delphi.ORM.Classes.Loader;
 
 function Field(const Name: String): TQueryBuilderCondition;
 begin
   Result.Condition := Name;
+end;
+
+function GetValueString(const Value: TValue): String;
+begin
+  case Value.Kind of
+    tkEnumeration: Exit(Value.AsOrdinal.ToString);
+
+    tkInteger,
+    tkInt64: Exit(Value.ToString);
+
+    tkFloat: Exit(FloatToStr(Value.AsExtended, TFormatSettings.Invariant));
+
+    tkUString: Exit(QuotedStr(Value.AsString));
+
+    tkRecord:
+      if TypeInfo(TGUID) = Value.TypeInfo then
+        Result := GetValueString(Value.AsType<TGUID>.ToString);
+    tkClass:
+      if Value.IsEmpty then
+        Result := 'null'
+      else
+        Result := GetValueString(TMapper.Default.FindTable(Value.AsObject.ClassType).PrimaryKey.GetValue(Value.AsObject));
+    else raise EInvalidTypeValue.Create('Invalid type value!');
+  end;
 end;
 
 { TQueryBuilder }
@@ -213,15 +239,8 @@ begin
   var Table := TMapper.Default.FindTable(AObject.ClassType);
   var Where := TQueryBuilderWhere<T>.Create(nil);
 
-  for var TableField in Table.PrimaryKey do
-  begin
-    var Comparision := Field(TableField.DatabaseName) = TableField.TypeInfo.GetValue(TObject(AObject));
-
-    if Condition.Condition.IsEmpty then
-      Condition := Comparision
-    else
-      Condition := Condition and Comparision;
-  end;
+  if Assigned(Table.PrimaryKey) then
+    Condition := Field(Table.PrimaryKey.DatabaseName) = Table.PrimaryKey.TypeInfo.GetValue(TObject(AObject));
 
   FConnection.ExecuteDirect(Format('delete from %s%s', [Table.DatabaseName, Where.Where(Condition).GetSQL]));
 
@@ -235,50 +254,28 @@ begin
   inherited;
 end;
 
-function TQueryBuilder.GetValueString(const Value: TValue): String;
-begin
-  case Value.Kind of
-    tkEnumeration,
-    tkInteger,
-    tkInt64: Result := Value.ToString;
-
-    tkFloat: Result := FloatToStr(Value.AsExtended, TFormatSettings.Invariant);
-
-    tkChar,
-    tkString,
-    tkWChar,
-    tkLString,
-    tkWString,
-    tkUString: Result := QuotedStr(Value.AsString);
-
-    tkUnknown,
-    tkSet,
-    tkClass,
-    tkMethod,
-    tkVariant,
-    tkArray,
-    tkRecord,
-    tkInterface,
-    tkDynArray,
-    tkClassRef,
-    tkPointer,
-    tkProcedure,
-    tkMRecord: raise Exception.Create('Invalid value!');
-  end;
-end;
-
 procedure TQueryBuilder.Insert<T>(const AObject: T);
 begin
+  var OutputFieldList: TArray<TField> := nil;
+  var OutputFieldNameList: TArray<String> := nil;
   var Table := TMapper.Default.FindTable(AObject.ClassType);
 
   var SQL := '(%s)values(%s)';
 
   for var Field in Table.Fields do
-    SQL := Format(SQL, [Field.DatabaseName + '%2:s%0:s', GetValueString(Field.TypeInfo.GetValue(TObject(AObject))) + '%2:s%1:s', ',']);
+    if Field.AutoGenerated then
+    begin
+      OutputFieldList := OutputFieldList + [Field];
+      OutputFieldNameList := OutputFieldNameList + [Field.DatabaseName];
+    end
+    else if not Field.IsManyValueAssociation then
+      SQL := Format(SQL, [Field.DatabaseName + '%2:s%0:s', GetValueString(Field.TypeInfo.GetValue(TObject(AObject))) + '%2:s%1:s', ',']);
 
-  SQL := 'insert into ' + Table.DatabaseName + Format(SQL, ['', '', '', '']);
+  var Cursor := FConnection.ExecuteInsert('insert into ' + Table.DatabaseName + Format(SQL, ['', '', '', '']), OutputFieldNameList);
 
-  FConnection.ExecuteDirect(SQL);
+  if Cursor.Next then
+    for var A := Low(OutputFieldList) to High(OutputFieldList) do
+      OutputFieldList[A].SetValue(TObject(AObject), Cursor.GetFieldValue(A));
 end;
 
 function TQueryBuilder.GetConnection: IDatabaseConnection;
@@ -318,7 +315,7 @@ begin
       else
         Condition := Condition and Comparision;
     end
-    else
+    else if not TableField.IsManyValueAssociation then
     begin
       if not SQL.IsEmpty then
         SQL := SQL + ',';
@@ -413,7 +410,7 @@ begin
 
     if RecursionControl[ForeignKey.ParentTable] < FRecursivityLevel then
     begin
-      var NewJoin := TQueryBuilderJoin.Create(ForeignKey.ParentTable, ForeignKey.Field, ForeignKey.Field, Join.Table.PrimaryKey[0]);
+      var NewJoin := TQueryBuilderJoin.Create(ForeignKey.ParentTable, ForeignKey.Field, ForeignKey.Field, Join.Table.PrimaryKey);
       RecursionControl[ForeignKey.ParentTable] := RecursionControl[ForeignKey.ParentTable] + 1;
 
       Join.Links := Join.Links + [NewJoin];
@@ -426,7 +423,7 @@ begin
 
   for var ManyValueAssociation in Join.Table.ManyValueAssociations do
   begin
-    var NewJoin := TQueryBuilderJoin.Create(ManyValueAssociation.ChildTable, ManyValueAssociation.Field, Join.Table.PrimaryKey[0], ManyValueAssociation.ChildField);
+    var NewJoin := TQueryBuilderJoin.Create(ManyValueAssociation.ChildTable, ManyValueAssociation.Field, Join.Table.PrimaryKey, ManyValueAssociation.ChildField);
 
     Join.Links := Join.Links + [NewJoin];
 
@@ -592,11 +589,11 @@ function TQueryBuilderAllFields.GetAllFields(Join: TQueryBuilderJoin): TArray<TF
 begin
   Result := nil;
 
-  for var Field in Join.Table.PrimaryKey do
-    Result := Result + [TFieldAlias.Create(Join.Alias, Field)];
+  if Assigned(Join.Table.PrimaryKey) then
+    Result := Result + [TFieldAlias.Create(Join.Alias, Join.Table.PrimaryKey)];
 
   for var Field in Join.Table.Fields do
-    if not Field.InPrimaryKey and not TMapper.IsJoinLink(Field) then
+    if not Field.InPrimaryKey and not Field.IsJoinLink then
       Result := Result + [TFieldAlias.Create(Join.Alias, Field)];
 
   for var Link in Join.Links do
@@ -739,6 +736,20 @@ end;
 class operator TQueryBuilderCondition.NotEqual(const Condition, Value: TQueryBuilderCondition): TQueryBuilderCondition;
 begin
   Result.Condition := GenerateCondition(Condition, qboNotEqual, Value.Condition);
+end;
+
+class operator TQueryBuilderCondition.NotEqual(const Condition: TQueryBuilderCondition; const Value: TObject): TQueryBuilderCondition;
+begin
+  var Table := TMapper.Default.FindTable(Value.ClassType);
+
+  Result.Condition := GenerateCondition(Condition, qboNotEqual, GetValueString(Table.PrimaryKey.TypeInfo.GetValue(Value)));
+end;
+
+class operator TQueryBuilderCondition.Equal(const Condition: TQueryBuilderCondition; const Value: TObject): TQueryBuilderCondition;
+begin
+  var Table := TMapper.Default.FindTable(Value.ClassType);
+
+  Result.Condition := GenerateCondition(Condition, qboEqual, GetValueString(Table.PrimaryKey.TypeInfo.GetValue(Value)));
 end;
 
 { TQueryBuilderJoin }

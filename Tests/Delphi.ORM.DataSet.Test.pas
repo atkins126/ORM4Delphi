@@ -7,6 +7,8 @@ uses Data.DB, DUnitX.TestFramework;
 type
   [TestFixture]
   TORMDataSetTest = class
+  private
+    procedure DestroyObjectArray(Values: TArray<TObject>);
   public
     [SetupFixture]
     procedure Setup;
@@ -20,11 +22,12 @@ type
     [TestCase('Byte', 'Byte,ftByte')]
     [TestCase('Cardinal', 'Cardinal,ftLongWord')]
     [TestCase('Char', 'Char,ftString')]
-    [TestCase('Class', 'Class,ftObject')]
+    [TestCase('Class', 'Class,ftVariant')]
     [TestCase('Currency', 'Currency,ftCurrency')]
     [TestCase('Date', 'Date,ftDate')]
     [TestCase('DateTime', 'DateTime,ftDateTime')]
     [TestCase('Double', 'Double,ftFloat')]
+    [TestCase('Enumerator', 'MyEnum,ftInteger')]
     [TestCase('Int64', 'Int64,ftLargeint')]
     [TestCase('Integer', 'Int,ftInteger')]
     [TestCase('Sigle', 'Single,ftSingle')]
@@ -59,7 +62,7 @@ type
     [Test]
     procedure WhenUseQualifiedClassNameHasToLoadTheDataSetWithoutErrors;
     [Test]
-    procedure WhnCheckingIfTheFieldIsNullCantRaiseAnError;
+    procedure WhenCheckingIfTheFieldIsNullCantRaiseAnError;
     [Test]
     procedure WhenCallFirstHaveToGoToTheFirstRecord;
     [Test]
@@ -70,6 +73,73 @@ type
     procedure WhenExistsAFieldInDataSetMustFillTheFieldDefFromThisField;
     [Test]
     procedure WhenInsertIntoDataSetCantRaiseAnError;
+    [Test]
+    procedure WhenPostARecordMustAppendToListOfObjects;
+    [TestCase('Boolean', 'Boolean,True')]
+    [TestCase('Byte', 'Byte,123')]
+    [TestCase('Cardinal', 'Cardinal,123')]
+    [TestCase('Char', 'Char,C')]
+    [TestCase('Currency', 'Currency;123,456', ';')]
+    [TestCase('Date', 'Date,21/12/2020')]
+    [TestCase('DateTime', 'DateTime,21/12/2020 17:17:17')]
+    [TestCase('Double', 'Double;123,456', ';')]
+    [TestCase('Enumerator', 'MyEnum,1')]
+    [TestCase('Int64', 'Int64,123')]
+    [TestCase('Integer', 'Int,123')]
+    [TestCase('Sigle', 'Single;123,456', ';')]
+    [TestCase('String', 'Str,Value String')]
+    [TestCase('Time', 'Time,17:17:17')]
+    [TestCase('WideChar', 'WideChar,C')]
+    [TestCase('WideString', 'WideString,Value String')]
+    [TestCase('Word', 'Word,123')]
+    procedure WhenSetTheFieldValueMustChangeTheValueFromTheClass(FieldName, FieldValue: String);
+    [TestCase('Char', 'Char,1')]
+    [TestCase('String', 'Str,50')]
+    [TestCase('WideChar', 'WideChar,1')]
+    [TestCase('WideString', 'WideString,50')]
+    procedure WhenAFieldIsACreateTheFieldMustHaveTheMinimalSizeDefined(FieldName: String; Size: Integer);
+    [Test]
+    procedure WhenOpenAnEmptyDataSetCantRaiseAnError;
+    [Test]
+    procedure WhenOpenAnEmptyDataSetTheCurrentObjectMustReturnNil;
+    [Test]
+    procedure WhenTryToGetAFieldValueFromAEmptyDataSetCantRaiseAnError;
+    [Test]
+    procedure WhenOpenAnEmptyDataSetTheValueOfTheFieldMustReturnNull;
+    [Test]
+    procedure WhenASubPropertyIsAnObjectAndTheValueIsNilCantRaiseAnError;
+    [Test]
+    procedure WhenFillingAFieldWithSubPropertyMustFillTheLastLevelOfTheField;
+    [Test]
+    procedure WhenOpenAClassWithDerivationMustLoadTheFieldFromTheBaseClassToo;
+    [Test]
+    procedure WhenTheDataSetIsEmptyCantRaiseAnErrorWhenGetAFieldFromASubPropertyThatIsAnObject;
+    [Test]
+    procedure EveryInsertedObjectMustGoToTheObjectList;
+    [Test]
+    procedure AfterInsertAnObjectMustResetTheObjectToSaveTheNewInfo;
+    [Test]
+    procedure WhenEditingTheDataSetAndSetAFieldValueMustChangeThePropertyOfTheObjectToo;
+    [Test]
+    procedure TheOldValuePropertyFromFieldMustReturnTheOriginalValueOfTheObjectBeingEdited;
+    [Test]
+    procedure WhenAStringFieldIsEmptyCantRaiseAnErrorBecauseOfIt;
+    [Test]
+    procedure WhenTheEditionIsCanceledMustReturnTheOriginalValueFromTheField;
+    [Test]
+    procedure WhenEditingCantIncreseTheRecordCountWhenPostTheRecord;
+    [Test]
+    procedure WhenSetAValueToAFieldThatIsAnObjectMustFillThePropertyInTheClassWithThisObject;
+    [Test]
+    procedure WhenGetAValueFromAFieldAndIsAnObjectMustReturnTheObjectFromTheClass;
+    [Test]
+    procedure OpenArrayObjectMustLoadTheObjectTypeFromTheParam;
+    [Test]
+    procedure OpenArrayObjectMustActiveTheDataSet;
+    [Test]
+    procedure OpenArrayMustLoadTheObjectListWithTheParamPassed;
+    [Test]
+    procedure TheRecNoPropertyMustReturnTheCurrentRecordPositionInTheDataSet;
   end;
 
   TAnotherObject = class
@@ -98,6 +168,17 @@ type
     property AnotherObject: TAnotherObject read FAnotherObject write FAnotherObject;
   end;
 
+  TMyTestClassChild = class(TMyTestClass)
+  private
+    FAField: String;
+    FAnotherField: Integer;
+  published
+    property AField: String read FAField write FAField;
+    property AnotherField: Integer read FAnotherField write FAnotherField;
+  end;
+
+  TMyEnumerator = (Enum1, Enum2, Enum3);
+
   TMyTestClassTypes = class
   private
     FInt: Integer;
@@ -119,6 +200,7 @@ type
     FSingle: Single;
     FCurrency: Currency;
     FClass: TObject;
+    FMyEnum: TMyEnumerator;
   published
     property Boolean: Boolean read FBoolean write FBoolean;
     property Byte: Byte read FByte write FByte;
@@ -132,6 +214,7 @@ type
     property Extended: Extended read FExtended write FExtended;
     property Int64: Int64 read FInt64 write FInt64;
     property Int: Integer read FInt write FInt;
+    property MyEnum: TMyEnumerator read FMyEnum write FMyEnum;
     property Single: Single read FSingle write FSingle;
     property SmallInt: SmallInt read FSmallInt write FSmallInt;
     property Str: String read FStr write FStr;
@@ -143,9 +226,34 @@ type
 
 implementation
 
-uses System.Rtti, System.Generics.Collections, System.SysUtils, System.Classes, Delphi.ORM.DataSet;
+uses System.Rtti, System.Generics.Collections, System.SysUtils, System.Classes, System.Variants, Delphi.ORM.DataSet;
 
 { TORMDataSetTest }
+
+procedure TORMDataSetTest.AfterInsertAnObjectMustResetTheObjectToSaveTheNewInfo;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenClass<TMyTestClass>;
+
+  DataSet.Append;
+
+  DataSet.FieldByName('Name').AsString := 'Name1';
+
+  DataSet.Post;
+
+  DataSet.Append;
+
+  DataSet.FieldByName('Name').AsString := 'Name2';
+
+  DataSet.Post;
+
+  Assert.AreEqual('Name1', TMyTestClass(DataSet.ObjectList[0]).Name);
+
+  DestroyObjectArray(DataSet.ObjectList);
+
+  DataSet.Free;
+end;
 
 procedure TORMDataSetTest.AfterOpenTheFieldMustLoadTheValuesFromTheObjectClass;
 begin
@@ -164,6 +272,68 @@ begin
   DataSet.Free;
 
   MyObject.Free;
+end;
+
+procedure TORMDataSetTest.DestroyObjectArray(Values: TArray<TObject>);
+begin
+  for var Value in Values do
+    Value.Free;
+end;
+
+procedure TORMDataSetTest.EveryInsertedObjectMustGoToTheObjectList;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenClass<TMyTestClass>;
+
+  DataSet.Append;
+
+  DataSet.Post;
+
+  Assert.IsNotNull(DataSet.ObjectList[0]);
+
+  DestroyObjectArray(DataSet.ObjectList);
+
+  DataSet.Free;
+end;
+
+procedure TORMDataSetTest.OpenArrayMustLoadTheObjectListWithTheParamPassed;
+begin
+  var Context := TRttiContext.Create;
+  var DataSet := TORMDataSet.Create(nil);
+  var MyClass := TMyTestClass.Create;
+
+  DataSet.OpenObjectArray(TMyTestClass, [MyClass]);
+
+  Assert.AreEqual(1, DataSet.RecordCount);
+
+  DataSet.Free;
+
+  MyClass.Free;
+end;
+
+procedure TORMDataSetTest.OpenArrayObjectMustActiveTheDataSet;
+begin
+  var Context := TRttiContext.Create;
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenObjectArray(TMyTestClass, nil);
+
+  Assert.IsTrue(DataSet.Active);
+
+  DataSet.Free;
+end;
+
+procedure TORMDataSetTest.OpenArrayObjectMustLoadTheObjectTypeFromTheParam;
+begin
+  var Context := TRttiContext.Create;
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenObjectArray(TMyTestClass, nil);
+
+  Assert.AreEqual(Context.GetType(TMyTestClass) as TRttiInstanceType, DataSet.ObjectType);
+
+  DataSet.Free;
 end;
 
 procedure TORMDataSetTest.Setup;
@@ -209,6 +379,46 @@ begin
   MyObject.Free;
 end;
 
+procedure TORMDataSetTest.TheOldValuePropertyFromFieldMustReturnTheOriginalValueOfTheObjectBeingEdited;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+  var MyClass := TMyTestClass.Create;
+
+  MyClass.Name := 'My Name';
+
+  DataSet.OpenObject(MyClass);
+
+  DataSet.Edit;
+
+  DataSet.FieldByName('Name').AsString := 'Another Name';
+
+  Assert.AreEqual<String>('My Name', DataSet.FieldByName('Name').OldValue);
+
+  DataSet.Free;
+
+  MyClass.Free;
+end;
+
+procedure TORMDataSetTest.TheRecNoPropertyMustReturnTheCurrentRecordPositionInTheDataSet;
+begin
+  var Context := TRttiContext.Create;
+  var DataSet := TORMDataSet.Create(nil);
+  var List: TArray<TMyTestClass> := [TMyTestClass.Create, TMyTestClass.Create, TMyTestClass.Create, TMyTestClass.Create, TMyTestClass.Create];
+
+  DataSet.OpenArray<TMyTestClass>(List);
+
+  DataSet.Next;
+
+  DataSet.Next;
+
+  Assert.AreEqual(2, DataSet.RecNo);
+
+  for var Item in List do
+    Item.Free;
+
+  DataSet.Free;
+end;
+
 procedure TORMDataSetTest.UsingBookmarkHaveToWorkLikeSpected;
 begin
   var DataSet := TORMDataSet.Create(nil);
@@ -242,6 +452,17 @@ begin
   MyList.Free;
 end;
 
+procedure TORMDataSetTest.WhenAFieldIsACreateTheFieldMustHaveTheMinimalSizeDefined(FieldName: String; Size: Integer);
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenClass<TMyTestClassTypes>;
+
+  Assert.AreEqual(Size, DataSet.FieldByName(FieldName).Size);
+
+  DataSet.Free;
+end;
+
 procedure TORMDataSetTest.WhenAFieldIsSeparatedByAPointItHasToLoadTheSubPropertiesOfTheObject;
 begin
   var DataSet := TORMDataSet.Create(nil);
@@ -255,6 +476,83 @@ begin
   DataSet.OpenObject(MyObject);
 
   Assert.AreEqual('MyName', DataSet.FieldByName('AnotherObject.AnotherObject.AnotherName').AsString);
+
+  DataSet.Free;
+
+  MyObject.Free;
+end;
+
+procedure TORMDataSetTest.WhenTheDataSetIsEmptyCantRaiseAnErrorWhenGetAFieldFromASubPropertyThatIsAnObject;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.FieldDefs.Add('AnotherObject.AnotherName', ftString, 50);
+
+  DataSet.OpenClass<TMyTestClass>;
+
+  Assert.WillNotRaise(
+    procedure
+    begin
+      DataSet.FieldByName('AnotherObject.AnotherName').AsString
+    end);
+
+  DataSet.Free;
+end;
+
+procedure TORMDataSetTest.WhenTheEditionIsCanceledMustReturnTheOriginalValueFromTheField;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+  var MyClass := TMyTestClass.Create;
+  MyClass.Name := 'My Name';
+
+  DataSet.OpenObject(MyClass);
+
+  DataSet.Edit;
+
+  DataSet.FieldByName('Name').AsString := 'New Name';
+
+  DataSet.Cancel;
+
+  Assert.AreEqual('My Name', DataSet.FieldByName('Name').AsString);
+
+  DataSet.Free;
+
+  MyClass.Free;
+end;
+
+procedure TORMDataSetTest.WhenAStringFieldIsEmptyCantRaiseAnErrorBecauseOfIt;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+  var MyClass := TMyTestClass.Create;
+
+  DataSet.OpenObject(MyClass);
+
+  Assert.WillNotRaise(
+    procedure
+    begin
+      DataSet.FieldByName('Name').AsString;
+    end);
+
+  DataSet.Free;
+
+  MyClass.Free;
+end;
+
+procedure TORMDataSetTest.WhenASubPropertyIsAnObjectAndTheValueIsNilCantRaiseAnError;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+  var MyObject := TMyTestClass.Create;
+  MyObject.AnotherObject := TAnotherObject.Create;
+
+  DataSet.FieldDefs.Add('AnotherObject.AnotherObject.AnotherName', ftString, 50);
+
+  DataSet.OpenObject(MyObject);
+
+  Assert.WillNotRaise(
+    procedure
+    begin
+      DataSet.FieldByName('AnotherObject.AnotherObject.AnotherName').AsString
+    end);
 
   DataSet.Free;
 
@@ -290,6 +588,45 @@ begin
   MyList.Free;
 end;
 
+procedure TORMDataSetTest.WhenEditingCantIncreseTheRecordCountWhenPostTheRecord;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+  var MyClass := TMyTestClass.Create;
+  MyClass.Name := 'My Name';
+
+  DataSet.OpenObject(MyClass);
+
+  DataSet.Edit;
+
+  DataSet.Post;
+
+  Assert.AreEqual(1, DataSet.RecordCount);
+
+  DataSet.Free;
+
+  MyClass.Free;
+end;
+
+procedure TORMDataSetTest.WhenEditingTheDataSetAndSetAFieldValueMustChangeThePropertyOfTheObjectToo;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+  var MyClass := TMyTestClass.Create;
+
+  MyClass.Name := 'My Name';
+
+  DataSet.OpenObject(MyClass);
+
+  DataSet.Edit;
+
+  DataSet.FieldByName('Name').AsString := 'Name1';
+
+  Assert.AreEqual('Name1', MyClass.Name);
+
+  DataSet.Free;
+
+  MyClass.Free;
+end;
+
 procedure TORMDataSetTest.WhenExistsAFieldInDataSetMustFillTheFieldDefFromThisField;
 begin
   var DataSet := TORMDataSet.Create(nil);
@@ -314,6 +651,45 @@ begin
   Assert.WillNotRaise(DataSet.Open);
 
   DataSet.Free;
+end;
+
+procedure TORMDataSetTest.WhenFillingAFieldWithSubPropertyMustFillTheLastLevelOfTheField;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+  var MyObject := TMyTestClass.Create;
+  MyObject.AnotherObject := TAnotherObject.Create;
+  MyObject.AnotherObject.AnotherObject := TAnotherObject.Create;
+
+  DataSet.FieldDefs.Add('AnotherObject.AnotherObject.AnotherName', ftString, 50);
+
+  DataSet.OpenObject(MyObject);
+
+  DataSet.Edit;
+
+  DataSet.FieldByName('AnotherObject.AnotherObject.AnotherName').AsString := 'A Name';
+
+  Assert.AreEqual('A Name', DataSet.FieldByName('AnotherObject.AnotherObject.AnotherName').AsString);
+
+  DataSet.Free;
+
+  MyObject.AnotherObject := nil;
+
+  MyObject.Free;
+end;
+
+procedure TORMDataSetTest.WhenGetAValueFromAFieldAndIsAnObjectMustReturnTheObjectFromTheClass;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+  var MyClass := TMyTestClass.Create;
+  MyClass.AnotherObject := TAnotherObject.Create;
+
+  DataSet.OpenObject(MyClass);
+
+  Assert.AreEqual<TObject>(MyClass.AnotherObject, (DataSet.FieldByName('AnotherObject') as TORMObjectField).AsObject);
+
+  DataSet.Free;
+
+  MyClass.Free;
 end;
 
 procedure TORMDataSetTest.WhenHaveFieldDefDefinedCantLoadFieldsFromTheClass;
@@ -409,6 +785,54 @@ begin
   MyList.Free;
 end;
 
+procedure TORMDataSetTest.WhenOpenAClassWithDerivationMustLoadTheFieldFromTheBaseClassToo;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenClass<TMyTestClassChild>;
+
+  Assert.AreEqual(6, DataSet.FieldCount);
+
+  DataSet.Free;
+end;
+
+procedure TORMDataSetTest.WhenOpenAnEmptyDataSetCantRaiseAnError;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenClass<TMyTestClass>;
+
+  Assert.WillNotRaise(
+    procedure
+    begin
+      DataSet.GetCurrentObject<TMyTestClass>;
+    end);
+
+  DataSet.Free;
+end;
+
+procedure TORMDataSetTest.WhenOpenAnEmptyDataSetTheCurrentObjectMustReturnNil;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenClass<TMyTestClass>;
+
+  Assert.IsNull(DataSet.GetCurrentObject<TMyTestClass>);
+
+  DataSet.Free;
+end;
+
+procedure TORMDataSetTest.WhenOpenAnEmptyDataSetTheValueOfTheFieldMustReturnNull;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenClass<TMyTestClass>;
+
+  Assert.IsNull(DataSet.FieldByName('Name').Value);
+
+  DataSet.Free;
+end;
+
 procedure TORMDataSetTest.WhenOpenDataSetFromAListMustHaveToLoadFieldListWithPropertiesOfMappedObject;
 begin
   var DataSet := TORMDataSet.Create(nil);
@@ -473,6 +897,99 @@ begin
   MyObject.Free;
 end;
 
+procedure TORMDataSetTest.WhenPostARecordMustAppendToListOfObjects;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenClass<TMyTestClass>;
+
+  DataSet.Append;
+
+  DataSet.Post;
+
+  DataSet.Append;
+
+  DataSet.Post;
+
+  Assert.AreEqual(2, DataSet.RecordCount);
+
+  DestroyObjectArray(DataSet.ObjectList);
+
+  DataSet.Free;
+end;
+
+procedure TORMDataSetTest.WhenSetAValueToAFieldThatIsAnObjectMustFillThePropertyInTheClassWithThisObject;
+begin
+  var AnotherObject := TAnotherObject.Create;
+  var DataSet := TORMDataSet.Create(nil);
+  var MyClass := TMyTestClass.Create;
+
+  DataSet.OpenObject(MyClass);
+
+  DataSet.Edit;
+
+  (DataSet.FieldByName('AnotherObject') as TORMObjectField).AsObject := AnotherObject;
+
+  DataSet.Post;
+
+  Assert.AreEqual(AnotherObject, MyClass.AnotherObject);
+
+  DataSet.Free;
+
+  MyClass.Free;
+end;
+
+procedure TORMDataSetTest.WhenSetTheFieldValueMustChangeTheValueFromTheClass(FieldName, FieldValue: String);
+begin
+  var Context := TRttiContext.Create;
+  var DataSet := TORMDataSet.Create(nil);
+  var RttiType := Context.GetType(TMyTestClassTypes);
+  var Value := NULL;
+
+  var &Property := RttiType.GetProperty(FieldName);
+
+  DataSet.OpenClass<TMyTestClassTypes>;
+
+  DataSet.Append;
+
+  var Field := DataSet.FieldByName(FieldName);
+
+  Field.AsString := FieldValue;
+
+  case Field.DataType of
+    ftBoolean: Value := True;
+    ftDate: Value := EncodeDate(2020, 12, 21);
+    ftDateTime: Value := EncodeDate(2020, 12, 21) + EncodeTime(17, 17, 17, 0);
+    ftTime: Value := EncodeTime(17, 17, 17, 0);
+    ftString,
+    ftWideString:
+      if Field.Size = 1 then
+        Value := 'C'
+      else
+        Value := 'Value String';
+
+    ftByte,
+    ftInteger,
+    ftLargeint,
+    ftLongWord,
+    ftWord:
+    begin
+      if &Property.PropertyType is TRttiEnumerationType then
+        Value := Enum2
+      else
+        Value := 123;
+    end;
+
+    ftCurrency,
+    ftFloat,
+    ftSingle: Value := 123.456;
+  end;
+
+  Assert.IsTrue(Value = &Property.GetValue(DataSet.GetCurrentObject<TMyTestClassTypes>).AsVariant);
+
+  DataSet.Free;
+end;
+
 procedure TORMDataSetTest.WhenTheFieldAndPropertyTypeAreDifferentItHasToRaiseAnException;
 begin
   var DataSet := TORMDataSet.Create(nil);
@@ -522,6 +1039,21 @@ begin
   DataSet.Free;
 end;
 
+procedure TORMDataSetTest.WhenTryToGetAFieldValueFromAEmptyDataSetCantRaiseAnError;
+begin
+  var DataSet := TORMDataSet.Create(nil);
+
+  DataSet.OpenClass<TMyTestClass>;
+
+  Assert.WillNotRaise(
+    procedure
+    begin
+      DataSet.FieldByName('Name').AsString;
+    end);
+
+  DataSet.Free;
+end;
+
 procedure TORMDataSetTest.WhenUseQualifiedClassNameHasToLoadTheDataSetWithoutErrors;
 begin
   var DataSet := TORMDataSet.Create(nil);
@@ -544,7 +1076,7 @@ begin
   DataSet.Free;
 end;
 
-procedure TORMDataSetTest.WhnCheckingIfTheFieldIsNullCantRaiseAnError;
+procedure TORMDataSetTest.WhenCheckingIfTheFieldIsNullCantRaiseAnError;
 begin
   var DataSet := TORMDataSet.Create(nil);
   var MyObject := TMyTestClass.Create;

@@ -15,7 +15,6 @@ type
 
     function CreateObject(Join: TQueryBuilderJoin; FieldIndexStart: Integer): TObject;
     function FieldValueToString(Field: TField; const FieldValue: Variant): String;
-    function GetFieldValue(Field: TField; const Index: Integer): TValue;
     function GetFieldValueVariant(const Index: Integer): Variant;
     function GetObjectFromCache(const Key: String; CreateFunction: TFunc<TObject>): TObject;
     function LoadClass: TObject;
@@ -50,12 +49,12 @@ end;
 function TClassLoader.CreateObject(Join: TQueryBuilderJoin; FieldIndexStart: Integer): TObject;
 begin
   Result := nil;
-  var TableKey := Join.Table.TypeInfo.Name;
+  var TableKey := Join.Table.DatabaseName;
 
-  for var A := FieldIndexStart to FieldIndexStart + High(Join.Table.PrimaryKey) do
+  if Assigned(Join.Table.PrimaryKey) then
   begin
-    var Field := FFields[A].Field;
-    var FieldValue := GetFieldValueVariant(A);
+    var Field := FFields[FieldIndexStart].Field;
+    var FieldValue := GetFieldValueVariant(FieldIndexStart);
 
     if VarIsNull(FieldValue) then
       Exit
@@ -75,20 +74,6 @@ begin
   FCache.Free;
 
   inherited;
-end;
-
-function TClassLoader.GetFieldValue(Field: TField; const Index: Integer): TValue;
-begin
-  var FieldValue := GetFieldValueVariant(Index);
-
-  if VarIsNull(FieldValue) then
-    Result := TValue.Empty
-  else if Field.TypeInfo.PropertyType = FContext.GetType(TypeInfo(TGUID)) then
-    Result := TValue.From(StringToGuid(FieldValue))
-  else if Field.TypeInfo.PropertyType is TRttiEnumerationType then
-    Result := TValue.FromOrdinal(Field.TypeInfo.PropertyType.Handle, FieldValue)
-  else
-    Result := TValue.FromVariant(FieldValue);
 end;
 
 function TClassLoader.GetFieldValueVariant(const Index: Integer): Variant;
@@ -151,9 +136,9 @@ begin
   if Assigned(Result) then
   begin
     for var A := Low(Join.Table.Fields) to High(Join.Table.Fields) do
-      if not TMapper.IsJoinLink(Join.Table.Fields[A]) then
+      if not Join.Table.Fields[A].IsJoinLink then
       begin
-        FFields[FieldIndexStart].Field.TypeInfo.SetValue(Result, GetFieldValue(FFields[FieldIndexStart].Field, FieldIndexStart));
+        FFields[FieldIndexStart].Field.SetValue(Result, GetFieldValueVariant(FieldIndexStart));
 
         Inc(FieldIndexStart);
       end;
@@ -162,7 +147,7 @@ begin
     begin
       var Value: TValue;
 
-      if TMapper.IsForeignKey(Link.Field) then
+      if Link.Field.IsForeignKey then
         Value := LoadClassLink(Link, FieldIndexStart)
       else
       begin
