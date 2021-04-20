@@ -9,19 +9,20 @@ type
   private
     FCache: TDictionary<String, TObject>;
     FContext: TRttiContext;
+    FConnection: IDatabaseConnection;
     FCursor: IDatabaseCursor;
     FFields: TArray<TFieldAlias>;
     FJoin: TQueryBuilderJoin;
 
-    function CreateObject(Join: TQueryBuilderJoin; FieldIndexStart: Integer): TObject;
+    function CreateObject(Table: TTable; const FieldIndexStart: Integer; var ObjectCreated: Boolean): TObject;
     function FieldValueToString(Field: TField; const FieldValue: Variant): String;
     function GetFieldValueVariant(const Index: Integer): Variant;
-    function GetObjectFromCache(const Key: String; CreateFunction: TFunc<TObject>): TObject;
-    function LoadClass: TObject;
-    function LoadClassJoin(Join: TQueryBuilderJoin): TObject;
-    function LoadClassLink(Join: TQueryBuilderJoin; var FieldIndexStart: Integer): TObject;
+    function GetObjectFromCache(const Key: String; var ObjectCreated: Boolean; CreateFunction: TFunc<TObject>): TObject;
+    function GetPrimaryKeyFromTable(Table: TTable; const FieldIndexStart: Integer): String;
+    function LoadClass(var ObjectCreated: Boolean): TObject;
+    function LoadClassJoin(Join: TQueryBuilderJoin; var FieldIndexStart: Integer; var ObjectCreated: Boolean): TObject;
   public
-    constructor Create(Cursor: IDatabaseCursor; Join: TQueryBuilderJoin; const Fields: TArray<TFieldAlias>);
+    constructor Create(Connection: IDatabaseConnection; From: TQueryBuilderFrom);
 
     destructor Destroy; override;
 
@@ -31,42 +32,35 @@ type
 
 implementation
 
-uses System.Variants;
+uses System.Variants, System.TypInfo, System.SysConst, Delphi.ORM.Rtti.Helper, Delphi.ORM.Lazy, Delphi.ORM.Lazy.Loader;
 
 { TClassLoader }
 
-constructor TClassLoader.Create(Cursor: IDatabaseCursor; Join: TQueryBuilderJoin; const Fields: TArray<TFieldAlias>);
+constructor TClassLoader.Create(Connection: IDatabaseConnection; From: TQueryBuilderFrom);
 begin
   inherited Create;
 
   FCache := TDictionary<String, TObject>.Create;
   FContext := TRttiContext.Create;
-  FCursor := Cursor;
-  FFields := Fields;
-  FJoin := Join;
+  FConnection := Connection;
+  FCursor := Connection.OpenCursor(From.Builder.GetSQL);
+  FFields := From.Fields;
+  FJoin := From.Join;
 end;
 
-function TClassLoader.CreateObject(Join: TQueryBuilderJoin; FieldIndexStart: Integer): TObject;
+function TClassLoader.CreateObject(Table: TTable; const FieldIndexStart: Integer; var ObjectCreated: Boolean): TObject;
 begin
-  Result := nil;
-  var TableKey := Join.Table.DatabaseName;
+  ObjectCreated := False;
+  var PrimaryKeyValue := GetPrimaryKeyFromTable(Table, FieldIndexStart);
 
-  if Assigned(Join.Table.PrimaryKey) then
-  begin
-    var Field := FFields[FieldIndexStart].Field;
-    var FieldValue := GetFieldValueVariant(FieldIndexStart);
-
-    if VarIsNull(FieldValue) then
-      Exit
-    else
-      TableKey := TableKey + '.' + FieldValueToString(Field, FieldValue);
-  end;
-
-  Result := GetObjectFromCache(TableKey,
-    function: TObject
-    begin
-      Result := Join.Table.TypeInfo.MetaclassType.Create;
-    end);
+  if PrimaryKeyValue.IsEmpty then
+    Result := nil
+  else
+    Result := GetObjectFromCache(PrimaryKeyValue, ObjectCreated,
+      function: TObject
+      begin
+        Result := Table.TypeInfo.MetaclassType.Create;
+      end);
 end;
 
 destructor TClassLoader.Destroy;
@@ -93,12 +87,32 @@ begin
     Result := FieldValue;
 end;
 
-function TClassLoader.GetObjectFromCache(const Key: String; CreateFunction: TFunc<TObject>): TObject;
+function TClassLoader.GetObjectFromCache(const Key: String; var ObjectCreated: Boolean; CreateFunction: TFunc<TObject>): TObject;
 begin
-  if not FCache.ContainsKey(Key) then
+  ObjectCreated := not FCache.ContainsKey(Key);
+
+  if ObjectCreated then
     FCache.Add(Key, CreateFunction);
 
   Result := FCache[Key];
+end;
+
+function TClassLoader.GetPrimaryKeyFromTable(Table: TTable; const FieldIndexStart: Integer): String;
+begin
+  Result := EmptyStr;
+
+  if Assigned(Table.PrimaryKey) then
+  begin
+    var Field := FFields[FieldIndexStart].Field;
+    var FieldValue := GetFieldValueVariant(FieldIndexStart);
+
+    if VarIsNull(FieldValue) then
+      Exit
+    else
+      Result := Result + '.' + FieldValueToString(Field, FieldValue);
+  end;
+
+  Result := Table.DatabaseName + Result;
 end;
 
 function TClassLoader.Load<T>: T;
@@ -112,63 +126,74 @@ end;
 
 function TClassLoader.LoadAll<T>: TArray<T>;
 begin
+  var ObjectCreated := False;
+  var ObjectLoaded: TObject := nil;
   Result := nil;
 
   while FCursor.Next do
-    Result := Result + [LoadClass as T];
-end;
-
-function TClassLoader.LoadClass: TObject;
-begin
-  Result := LoadClassJoin(FJoin);
-end;
-
-function TClassLoader.LoadClassJoin(Join: TQueryBuilderJoin): TObject;
-begin
-  var FieldIndex := Low(Join.Table.Fields);
-  Result := LoadClassLink(FJoin, FieldIndex);
-end;
-
-function TClassLoader.LoadClassLink(Join: TQueryBuilderJoin; var FieldIndexStart: Integer): TObject;
-begin
-  Result := CreateObject(Join, FieldIndexStart);
-
-  if Assigned(Result) then
   begin
-    for var A := Low(Join.Table.Fields) to High(Join.Table.Fields) do
-      if not Join.Table.Fields[A].IsJoinLink then
-      begin
-        FFields[FieldIndexStart].Field.SetValue(Result, GetFieldValueVariant(FieldIndexStart));
+    ObjectLoaded := LoadClass(ObjectCreated);
 
-        Inc(FieldIndexStart);
-      end;
+    if ObjectCreated then
+      Result := Result + [ObjectLoaded as T];
+  end;
+end;
 
-    for var Link in Join.Links do
+function TClassLoader.LoadClass(var ObjectCreated: Boolean): TObject;
+begin
+  var FieldIndex := Low(FJoin.Table.Fields);
+  Result := LoadClassJoin(FJoin, FieldIndex, ObjectCreated);
+end;
+
+function TClassLoader.LoadClassJoin(Join: TQueryBuilderJoin; var FieldIndexStart: Integer; var ObjectCreated: Boolean): TObject;
+begin
+  Result := CreateObject(Join.Table, FieldIndexStart, ObjectCreated);
+
+  for var Field in Join.Table.Fields do
+    if not Field.IsJoinLink or Field.IsLazy then
     begin
-      var Value: TValue;
-
-      if Link.Field.IsForeignKey then
-        Value := LoadClassLink(Link, FieldIndexStart)
-      else
+      if Assigned(Result) then
       begin
-        var ChildObject := LoadClassLink(Link, FieldIndexStart);
+        var FieldValue := GetFieldValueVariant(FieldIndexStart);
 
-        if Assigned(ChildObject) then
-        begin
-          Value := Link.Field.TypeInfo.GetValue(Result);
-
-          var NewArrayLength: NativeInt := Succ(Value.GetArrayLength);
-
-          DynArraySetLength(PPointer(Value.GetReferenceToRawData)^, Link.Field.TypeInfo.PropertyType.Handle, 1, @NewArrayLength);
-
-          Value.SetArrayElement(Pred(Value.GetArrayLength), ChildObject);
-
-          Link.RightField.TypeInfo.SetValue(ChildObject, Result);
-        end;
+        if Field.IsLazy then
+          GetLazyLoadingAccess(Field.TypeInfo.GetValue(Result)).SetLazyLoader(TLazyLoader.Create(FConnection, Field.ForeignKey.ParentTable, TValue.FromVariant(FieldValue)))
+        else
+          Field.SetValue(Result, FieldValue);
       end;
 
-      Link.Field.TypeInfo.SetValue(Result, Value);
+      Inc(FieldIndexStart);
     end;
+
+  for var Link in Join.Links do
+  begin
+    var WasObjectCreated := False;
+    var Value: TValue;
+
+    if Link.Field.IsForeignKey then
+      Value := LoadClassJoin(Link, FieldIndexStart, WasObjectCreated)
+    else
+    begin
+      var ChildObject := LoadClassJoin(Link, FieldIndexStart, WasObjectCreated);
+
+      if not WasObjectCreated then
+        Continue
+      else if Assigned(ChildObject) then
+      begin
+        Value := Link.Field.GetValue(Result);
+
+        var ArrayLength := Value.ArrayLength;
+
+        Value.ArrayLength := Succ(ArrayLength);
+
+        Value.ArrayElement[ArrayLength] := ChildObject;
+
+        Link.RightField.SetValue(ChildObject, Result);
+      end;
+    end;
+
+    if Assigned(Result) then
+      Link.Field.SetValue(Result, Value);
   end;
 end;
 

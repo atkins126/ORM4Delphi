@@ -8,10 +8,11 @@ type
   [TestFixture]
   TClassLoaderTest = class
   private
-    FFrom: TQueryBuilderFrom;
+    FBuilder: TQueryBuilder;
 
-    function CreateFieldList<T: class>: TArray<TFieldAlias>;
-    function CreateLoader<T: class>(CursorValues: TArray<TArray<Variant>>): TClassLoader;
+    function CreateCursor(const CursorValues: TArray<TArray<Variant>>): IDatabaseCursor;
+    function CreateLoader<T: class>(const CursorValues: TArray<TArray<Variant>>): TClassLoader;
+    function CreateLoaderConnection<T: class>(Connection: IDatabaseConnection): TClassLoader;
     function CreateLoaderCursor<T: class>(Cursor: IDatabaseCursor): TClassLoader;
   public
     [TearDown]
@@ -48,57 +49,53 @@ type
     procedure WhenThePrimaryKeyOfAForeignKeyIsNullCantLoadTheEntireObject;
     [Test]
     procedure WhenThePrimaryKeyOfAManyValueAssociationIsNullCantLoadTheEntireObject;
-  end;
-
-  [Entity]
-  [PrimaryKey('Name')]
-  TMyClass = class
-  private
-    FName: String;
-    FValue: Integer;
-  published
-    property Name: String read FName write FName;
-    property Value: Integer read FValue write FValue;
-  end;
-
-  TMyEnumerator = (Enum1, Enum2, Enum3, Enum4);
-
-  [Entity]
-  TMyClassWithSpecialTypes = class
-  private
-    FGuid: TGUID;
-    FEnumerator: TMyEnumerator;
-  published
-    property Enumerator: TMyEnumerator read FEnumerator write FEnumerator;
-    property Guid: TGUID read FGuid write FGuid;
+    [Test]
+    procedure WhenTheClassAsMoreThenOneForeignKeyAndOneOfThenIsNullMustJumpTheFieldsOfNullForeignKey;
+    [Test]
+    procedure WhenTheClassAsForeignKeyWithAnotherForignKeyAndIsNullTheValuesMustJumpTheFieldsOfAllForeignKeys;
+    [Test]
+    procedure WhenLoadAllIsCallWithTheSamePrimaryKeyValueMustReturnASingleObject;
+    [Test]
+    procedure WhenAClassHasManyValueAssociationsInChildClassesMustGroupTheValuesByThePrimaryKey;
+    [Test]
+    procedure WhenTheFieldIsLazyLoadingMustReturnTheValueOfThePropertyAsExpected;
+    [Test]
+    procedure WhenTheManyValueAssociationReturnTheValuesOutOfOrderMustGroupAllValuesInTheSingleObjectReference;
   end;
 
 implementation
 
-uses System.Generics.Collections, System.SysUtils, System.Variants, Delphi.Mock, Delphi.ORM.Query.Builder.Test.Entity, Delphi.ORM.Cursor.Mock;
+uses System.Generics.Collections, System.SysUtils, System.Variants, Delphi.Mock, Delphi.ORM.Test.Entity, Delphi.ORM.Cursor.Mock;
 
 { TClassLoaderTest }
 
-function TClassLoaderTest.CreateFieldList<T>: TArray<TFieldAlias>;
+function TClassLoaderTest.CreateCursor(const CursorValues: TArray<TArray<Variant>>): IDatabaseCursor;
 begin
-  var AllFields := TQueryBuilderAllFields.Create(FFrom);
-  Result := AllFields.GetFields;
-
-  AllFields.Free;
+  Result := TCursorMock.Create(CursorValues);
 end;
 
-function TClassLoaderTest.CreateLoader<T>(CursorValues: TArray<TArray<Variant>>): TClassLoader;
+function TClassLoaderTest.CreateLoader<T>(const CursorValues: TArray<TArray<Variant>>): TClassLoader;
 begin
-  Result := CreateLoaderCursor<T>(TCursorMock.Create(CursorValues));
+  Result := CreateLoaderCursor<T>(CreateCursor(CursorValues));
 end;
 
 function TClassLoaderTest.CreateLoaderCursor<T>(Cursor: IDatabaseCursor): TClassLoader;
 begin
-  FFrom := TQueryBuilderFrom.Create(nil, 1);
+  var Connection := TMock.CreateInterface<IDatabaseConnection>;
 
-  FFrom.From<T>;
+  Connection.Setup.WillReturn(TValue.From(Cursor)).When.OpenCursor(It.IsAny<String>);
 
-  Result := TClassLoader.Create(Cursor, FFrom.Join, CreateFieldList<T>);
+  Result := CreateLoaderConnection<T>(Connection.Instance);
+end;
+
+function TClassLoaderTest.CreateLoaderConnection<T>(Connection: IDatabaseConnection): TClassLoader;
+begin
+  FBuilder := TQueryBuilder.Create(Connection);
+  var From := FBuilder.Select.All;
+
+  From.From<T>;
+
+  Result := TClassLoader.Create(Connection, From);
 end;
 
 procedure TClassLoaderTest.EvenIfTheCursorReturnsMoreThanOneRecordTheLoadClassHasToReturnOnlyOneClass;
@@ -129,7 +126,6 @@ begin
 
   for var Obj in Result do
     Obj.Free;
-
   Loader.Free;
 end;
 
@@ -148,7 +144,7 @@ end;
 
 procedure TClassLoaderTest.TearDown;
 begin
-  FFrom.Free;
+  FBuilder.Free;
 end;
 
 procedure TClassLoaderTest.TheChildFieldInManyValueAssociationMustBeLoadedWithTheReferenceOfTheParentClass;
@@ -174,9 +170,7 @@ begin
   Assert.IsNotNull(Result.AnotherClass);
 
   Result.AnotherClass.Free;
-
   Result.Free;
-
   Loader.Free;
 end;
 
@@ -189,15 +183,51 @@ begin
   Assert.AreEqual(789, Result.AnotherClass.Value);
 
   Result.AnotherClass.Free;
-
   Result.Free;
-
   Loader.Free;
 end;
 
 procedure TClassLoaderTest.SetupFixture;
 begin
   TMapper.Default.LoadAll;
+end;
+
+procedure TClassLoaderTest.WhenAClassHasManyValueAssociationsInChildClassesMustGroupTheValuesByThePrimaryKey;
+begin
+  var Loader := CreateLoader<TMyClassParent>([[1, 10, 'Value', 100, 'Another Value'], [1, 10, 'Value', 200, 'Another Value'], [1, 20, 'Value', 300, 'Another Value'], [2, 30, 'Value', 400, 'Another Value']]);
+  var Result := Loader.LoadAll<TMyClassParent>;
+
+  Assert.AreEqual<Integer>(2, Length(Result), 'Main object');
+
+  Assert.AreEqual<Integer>(2, Length(Result[0].Child), 'Key 1');
+
+  Assert.AreEqual<Integer>(2, Length(Result[0].Child[0].Child), 'Key 1, 10');
+
+  Assert.AreEqual<Integer>(1, Length(Result[0].Child[1].Child), 'Key 1, 20');
+
+  Assert.AreEqual<Integer>(1, Length(Result[1].Child), 'Key 2');
+
+  Assert.AreEqual<Integer>(1, Length(Result[1].Child[0].Child), 'Key 2, 30');
+
+  Loader.Free;
+
+  Result[1].Child[0].Child[0].Free;
+
+  Result[1].Child[0].Free;
+
+  Result[1].Free;
+
+  Result[0].Child[1].Child[0].Free;
+
+  Result[0].Child[1].Free;
+
+  Result[0].Child[0].Child[1].Free;
+
+  Result[0].Child[0].Child[0].Free;
+
+  Result[0].Child[0].Free;
+
+  Result[0].Free;
 end;
 
 procedure TClassLoaderTest.WhenAClassIsLoadedAndMustUseTheSameInstanceIfThePrimaryKeyRepeats;
@@ -224,6 +254,14 @@ begin
 
   for var Obj in Result do
     Obj.Free;
+  Loader.Free;
+end;
+procedure TClassLoaderTest.WhenLoadAllIsCallWithTheSamePrimaryKeyValueMustReturnASingleObject;
+begin
+  var Loader := CreateLoader<TMyClass>([['aaa', 222], ['aaa', 222], ['aaa', 222]]);
+  var Result := Loader.LoadAll<TMyClass>;
+  Assert.AreEqual<Integer>(1, Length(Result));
+  Result[0].Free;
 
   Loader.Free;
 end;
@@ -243,6 +281,44 @@ begin
   Loader.Free;
 end;
 
+procedure TClassLoaderTest.WhenTheClassAsForeignKeyWithAnotherForignKeyAndIsNullTheValuesMustJumpTheFieldsOfAllForeignKeys;
+begin
+  var Loader := CreateLoader<TClassWithSubForeignKey>([[123, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 111, NULL, NULL, NULL, NULL, NULL, NULL, 555, 'My Field', 222.333]]);
+  var MyClass := Loader.Load<TClassWithSubForeignKey>;
+
+  Assert.IsTrue(Assigned(MyClass.ForeignKey2));
+
+  Assert.IsTrue(Assigned(MyClass.ForeignKey2.ForeignKey3));
+
+  Assert.AreEqual(555, MyClass.ForeignKey2.ForeignKey3.Id);
+
+  MyClass.ForeignKey2.ForeignKey3.Free;
+
+  MyClass.ForeignKey2.Free;
+
+  MyClass.Free;
+
+  Loader.Free;
+end;
+
+procedure TClassLoaderTest.WhenTheClassAsMoreThenOneForeignKeyAndOneOfThenIsNullMustJumpTheFieldsOfNullForeignKey;
+begin
+  var Loader := CreateLoader<TClassWithThreeForeignKey>([[111, NULL, NULL, NULL, NULL, NULL, NULL, 555, 'My Field', 222.333]]);
+  var MyClass := Loader.Load<TClassWithThreeForeignKey>;
+
+  Assert.IsTrue(Assigned(MyClass.ForeignKey3));
+
+  Assert.AreEqual(555, MyClass.ForeignKey3.Id);
+  Assert.AreEqual('My Field', MyClass.ForeignKey3.Field1);
+  Assert.AreEqual<Double>(222.333, MyClass.ForeignKey3.Field2);
+
+  MyClass.ForeignKey3.Free;
+
+  MyClass.Free;
+
+  Loader.Free;
+end;
+
 procedure TClassLoaderTest.WhenTheClassAsSpecialFieldsMustLoadTheFieldsAsExpected;
 begin
   var MyGuid := TGUID.Create('{EFBF3977-8A0E-4508-B913-E1F8FA2B2D6C}');
@@ -255,6 +331,43 @@ begin
   Assert.AreEqual(MyGuid.ToString, MyClass.Guid.ToString);
 
   MyClass.Free;
+
+  Loader.Free;
+end;
+
+procedure TClassLoaderTest.WhenTheFieldIsLazyLoadingMustReturnTheValueOfThePropertyAsExpected;
+begin
+  var Connection := TMock.CreateInterface<IDatabaseConnection>;
+
+  Connection.Setup.WillReturn(TValue.From(CreateCursor([[1, 222]]))).When.OpenCursor(It.IsEqualTo('select T1.Id F1,T1.IdLazy F2 from LazyClass T1'));
+
+  Connection.Setup.WillReturn(TValue.From(CreateCursor([[222, 'A name', 123.456]]))).When.OpenCursor(It.IsEqualTo('select T1.Id F1,T1.Name F2,T1.Value F3 from MyEntity T1 where T1.Id=222'));
+
+  var Loader := CreateLoaderConnection<TLazyClass>(Connection.Instance);
+
+  var MyLazy := Loader.Load<TLazyClass>;
+
+  Assert.AreEqual(222, MyLazy.Lazy.Value.Id);
+
+  MyLazy.Free;
+
+  Loader.Free;
+end;
+
+procedure TClassLoaderTest.WhenTheManyValueAssociationReturnTheValuesOutOfOrderMustGroupAllValuesInTheSingleObjectReference;
+begin
+  var Loader := CreateLoader<TMyEntityWithManyValueAssociation>([[111, 222], [111, 333], [222, 444], [222, 333], [111, 444]]);
+  var Result := Loader.LoadAll<TMyEntityWithManyValueAssociation>;
+
+  Assert.AreEqual<Integer>(2, Length(Result));
+
+  for var ParentObj in Result do
+  begin
+    for var Obj in ParentObj.ManyValueAssociationList do
+      Obj.Free;
+
+    ParentObj.Free;
+  end;
 
   Loader.Free;
 end;

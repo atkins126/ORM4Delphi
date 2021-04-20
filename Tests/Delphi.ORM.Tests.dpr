@@ -14,8 +14,6 @@ uses
   {$ENDIF }
   DUnitX.TestFramework,
   DUnitX.MemoryLeakMonitor.FastMM5,
-  Delphi.ORM in '..\Delphi.ORM.pas',
-  Delphi.ORM.Test in 'Delphi.ORM.Test.pas',
   Delphi.ORM.DataSet.Test in 'Delphi.ORM.DataSet.Test.pas',
   Delphi.ORM.DataSet in '..\Delphi.ORM.DataSet.pas',
   Delphi.ORM.Database.Connection in '..\Delphi.ORM.Database.Connection.pas',
@@ -27,9 +25,15 @@ uses
   Delphi.ORM.Mapper.Test in 'Delphi.ORM.Mapper.Test.pas',
   Delphi.ORM.Mapper in '..\Delphi.ORM.Mapper.pas',
   Delphi.ORM.Rtti.Helper in '..\Delphi.ORM.Rtti.Helper.pas',
-  Delphi.ORM.Query.Builder.Test.Entity in 'Delphi.ORM.Query.Builder.Test.Entity.pas',
+  Delphi.ORM.Test.Entity in 'Delphi.ORM.Test.Entity.pas',
   Delphi.ORM.Database.Connection.Unidac in '..\Delphi.ORM.Database.Connection.Unidac.pas',
-  Delphi.ORM.Cursor.Mock in 'Delphi.ORM.Cursor.Mock.pas';
+  Delphi.ORM.Cursor.Mock in 'Delphi.ORM.Cursor.Mock.pas',
+  Delphi.ORM.Rtti.Helper.Test in 'Delphi.ORM.Rtti.Helper.Test.pas',
+  Delphi.ORM.Nullable in '..\Delphi.ORM.Nullable.pas',
+  Delphi.ORM.Nullable.Test in 'Delphi.ORM.Nullable.Test.pas',
+  Delphi.ORM.Lazy in '..\Delphi.ORM.Lazy.pas',
+  Delphi.ORM.Lazy.Test in 'Delphi.ORM.Lazy.Test.pas',
+  Delphi.ORM.Lazy.Loader in '..\Delphi.ORM.Lazy.Loader.pas';
 
 // Para não remover o valor abaixo
 {$IFNDEF TESTINSIGHT}
@@ -40,6 +44,12 @@ var
   nunitLogger : ITestLogger;
 {$ENDIF}
 begin
+  FastMM_OutputDebugStringEvents := [];
+  FastMM_LogToFileEvents := [mmetUnexpectedMemoryLeakSummary];
+  FastMM_MessageBoxEvents := [mmetDebugBlockDoubleFree, mmetDebugBlockReallocOfFreedBlock, mmetVirtualMethodCallOnFreedObject];
+
+  FastMM_DeleteEventLogFile;
+
 {$IFDEF TESTINSIGHT}
   TestInsight.DUnitX.RunRegisteredTests;
 {$ELSE}
