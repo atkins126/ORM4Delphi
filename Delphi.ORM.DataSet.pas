@@ -17,6 +17,7 @@ type
 
   EPropertyNameDoesNotExist = class(Exception);
   EPropertyWithDifferentType = class(Exception);
+  TORMCalcFieldBuffer = {$IFDEF PAS2JS}TDataRecord{$ELSE}TRecBuf{$ENDIF};
   TORMFieldBuffer = {$IFDEF PAS2JS}TDataRecord{$ELSE}TValueBuffer{$ENDIF};
   TORMRecordBuffer = {$IFDEF PAS2JS}TDataRecord{$ELSE}TRecordBuffer{$ENDIF};
   TORMValueBuffer = {$IFDEF PAS2JS}JSValue{$ELSE}TValueBuffer{$ENDIF};
@@ -139,6 +140,7 @@ type
     function GetRecNo: Integer; override;
     function IsCursorOpen: Boolean; override;
 
+    procedure ClearCalcFields({$IFDEF PAS2JS}var {$ENDIF}Buffer: TORMCalcFieldBuffer); override;
     procedure DataEvent(Event: TDataEvent; Info: {$IFDEF PAS2JS}JSValue{$ELSE}NativeInt{$ENDIF}); override;
     procedure DoAfterOpen; override;
     procedure GetBookmarkData(Buffer: TORMRecordBuffer; {$IFDEF PAS2JS}var {$ENDIF}Data: TBookmark); override;
@@ -213,7 +215,7 @@ type
 
 implementation
 
-uses {$IFDEF PAS2JS}JS{$ELSE}System.SysConst{$ENDIF}, System.Math, Delphi.ORM.Nullable, Delphi.ORM.Rtti.Helper, Delphi.ORM.Lazy;
+uses Delphi.ORM.Nullable, System.Math, Delphi.ORM.Rtti.Helper, Delphi.ORM.Lazy, {$IFDEF PAS2JS}JS{$ELSE}System.SysConst{$ENDIF};
 
 { TORMListIterator<T> }
 
@@ -366,6 +368,19 @@ procedure TORMDataSet.CheckObjectTypeLoaded;
 begin
   if not Assigned(ObjectType) then
     raise EDataSetWithoutObjectDefinition.Create;
+end;
+
+procedure TORMDataSet.ClearCalcFields({$IFDEF PAS2JS}var {$ENDIF}Buffer: TORMCalcFieldBuffer);
+var
+  A: Integer;
+
+  CalcBuffer: TArray<TValue>;
+
+begin
+  CalcBuffer := GetRecordInfoFromActiveBuffer.CalculedFieldBuffer;
+
+  for A := Low(CalcBuffer) to High(CalcBuffer) do
+    CalcBuffer[A] := TValue.Empty;
 end;
 
 {$IFDEF PAS2JS}
@@ -706,7 +721,7 @@ begin
   Value := &Property.GetValue(Instance.AsObject);
 
   if IsNullableType(&Property.PropertyType) then
-    Value := GetNullableValue(&Property.PropertyType, Instance)
+    Value := GetNullableAccess(Instance).GetValue
   else if IsLazyLoading(&Property.PropertyType) then
     Value := GetLazyLoadingAccess(Instance).GetValue;
 end;
@@ -736,7 +751,7 @@ begin
   begin
     GetRecordInfoFromBuffer(Buffer).ArrayPosition := FIterator.CurrentPosition;
 
-    GetCalcFields(Buffer);
+    GetCalcFields(TORMCalcFieldBuffer(Buffer));
   end;
 end;
 
@@ -1087,28 +1102,29 @@ var
 
   &Property: TRttiProperty;
 
-{$IFDEF DCC}
   Value: TValue;
-{$ELSE}
-  Value: JSValue absolute Buffer;
-{$ENDIF}
+
 begin
   if not (State in dsWriteModes) then
     raise EDataSetNotInEditingState.Create;
 
-{$IFDEF DCC}
   Value := TValue.Empty;
 
   if Assigned(Buffer) then
     case Field.DataType of
+{$IFDEF DCC}
       ftByte,
-      ftInteger,
-      ftWord: Value := TValue.From(PInteger(Buffer)^);
-      ftString: Value := TValue.From(String(AnsiString(PAnsiChar(Buffer))));
-      ftBoolean: Value := TValue.From(PWordBool(Buffer)^);
+      ftWord,
+{$ENDIF}
+      ftInteger: Value := TValue.From({$IFDEF PAS2JS}Integer(Buffer){$ELSE}PInteger(Buffer)^{$ENDIF});
+      ftString: Value := TValue.From({$IFDEF PAS2JS}String(Buffer){$ELSE}String(AnsiString(PAnsiChar(Buffer))){$ENDIF});
+      ftBoolean: Value := TValue.From({$IFDEF PAS2JS}Boolean(Buffer){$ELSE}PWordBool(Buffer)^{$ENDIF});
       ftDate,
       ftDateTime,
       ftTime:
+{$IFDEF PAS2JS}
+        Value := TValue.From(TDateTime(Buffer));
+{$ELSE}
       begin
         var DataTimeValue: TORMValueBuffer;
 
@@ -1118,19 +1134,24 @@ begin
 
         Value := TValue.From(PDouble(DataTimeValue)^);
       end;
-      ftCurrency,
-      ftFloat: Value := TValue.From(PDouble(Buffer)^);
+{$ENDIF}
+{$IFDEF DCC}
       TFieldType.ftSingle: Value := TValue.From(PSingle(Buffer)^);
 
       TFieldType.ftExtended: Value := TValue.From(PExtended(Buffer)^);
 
       ftLongWord: Value := TValue.From(PCardinal(Buffer)^);
 
-      ftLargeint: Value := TValue.From(PInt64(Buffer)^);
       ftWideString: Value := TValue.From(String(PWideChar(Buffer)));
-      ftVariant: Value := TValue.From(TObject(PNativeInt(Buffer)^));
-    end;
+
+      ftCurrency,
 {$ENDIF}
+      ftFloat: Value := TValue.From({$IFDEF PAS2JS}Double(Buffer){$ELSE}PDouble(Buffer)^{$ENDIF});
+
+      ftLargeint: Value := TValue.From({$IFDEF PAS2JS}Int64(Buffer){$ELSE}PInt64(Buffer)^{$ENDIF});
+
+      ftVariant: Value := TValue.From({$IFDEF PAS2JS}TObject(Buffer){$ELSE}TObject(PNativeInt(Buffer)^){$ENDIF});
+    end;
 
   if Field.FieldKind = fkData then
   begin
@@ -1142,14 +1163,14 @@ begin
 {$ENDIF}
 
     if IsNullableType(&Property.PropertyType) then
-      SetNullableValue(&Property.PropertyType, &Property.GetValue(Instance.AsObject), Value)
+      GetNullableAccess(&Property.GetValue(Instance.AsObject)).SetValue(Value)
     else if IsLazyLoading(&Property.PropertyType) then
-      GetLazyLoadingAccess(&Property.GetValue(Instance.AsObject)).SetValue({$IFDEF PAS2JS}TValue.FromJSValue{$ENDIF}(Value))
+      GetLazyLoadingAccess(&Property.GetValue(Instance.AsObject)).SetValue(Value)
     else
       &Property.SetValue(Instance.AsObject, Value);
   end
   else if Field.FieldKind = fkCalculated then
-    GetRecordInfoFromActiveBuffer.CalculedFieldBuffer[FCalculatedFields[Field]] := {$IFDEF PAS2JS}TValue.FromJSValue{$ENDIF}(Value);
+    GetRecordInfoFromActiveBuffer.CalculedFieldBuffer[FCalculatedFields[Field]] := Value;
 
   if not (State in [dsCalcFields, dsInternalCalc, dsFilter, dsNewValue]) then
     DataEvent(deFieldChange, {$IFDEF DCC}IntPtr{$ENDIF}(Field));
