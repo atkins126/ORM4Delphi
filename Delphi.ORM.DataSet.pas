@@ -17,6 +17,9 @@ type
 
   EPropertyNameDoesNotExist = class(Exception);
   EPropertyWithDifferentType = class(Exception);
+  ESelfFieldDifferentObjectType = class(Exception);
+  ESelfFieldNotAllowEmptyValue = class(Exception);
+  ESelfFieldTypeWrong = class(Exception);
   TORMCalcFieldBuffer = {$IFDEF PAS2JS}TDataRecord{$ELSE}TRecBuf{$ENDIF};
   TORMFieldBuffer = {$IFDEF PAS2JS}TDataRecord{$ELSE}TValueBuffer{$ENDIF};
   TORMRecordBuffer = {$IFDEF PAS2JS}TDataRecord{$ELSE}TRecordBuffer{$ENDIF};
@@ -56,10 +59,11 @@ type
     procedure ResetEnd;
     procedure Resync;
     procedure SetCurrentPosition(const Value: Cardinal);
+    procedure SetObject(Index: Cardinal; const Value: TObject);
     procedure UpdateArrayProperty(&Property: TRttiProperty; Instance: TObject);
 
     property CurrentPosition: Cardinal read GetCurrentPosition write SetCurrentPosition;
-    property Objects[Index: Cardinal]: TObject read GetObject; default;
+    property Objects[Index: Cardinal]: TObject read GetObject write SetObject; default;
     property RecordCount: Integer read GetRecordCount;
   end;
 
@@ -82,6 +86,7 @@ type
     procedure ResetEnd;
     procedure Resync;
     procedure SetCurrentPosition(const Value: Cardinal);
+    procedure SetObject(Index: Cardinal; const Value: TObject);
     procedure UpdateArrayProperty(&Property: TRttiProperty; Instance: TObject);
 
     property CurrentPosition: Cardinal read GetCurrentPosition write SetCurrentPosition;
@@ -117,21 +122,29 @@ type
     function GetRecordInfoFromBuffer(const Buffer: TORMRecordBuffer): TORMRecordInfo;
     function GetCurrentActiveBuffer: TORMRecordBuffer;
     function GetObjectAndPropertyFromParentDataSet(var Instance: TValue; var &Property: TRttiProperty): Boolean;
+    function IsSelfField(Field: TField): Boolean;
 
     procedure CheckCalculatedFields;
     procedure CheckIterator;
     procedure CheckObjectTypeLoaded;
-    procedure GetPropertyValue(const &Property: TRttiProperty; const Instance: TValue; var Value: TValue);
+    procedure CheckSelfFieldType;
+    procedure GetPropertyValue(const &Property: TRttiProperty; var Instance: TValue);
     procedure LoadDetailInfo;
     procedure LoadFieldDefsFromClass;
     procedure LoadObjectListFromParentDataSet;
     procedure LoadPropertiesFromFields;
     procedure OpenInternalIterator(ObjectClass: TClass; Iterator: IORMObjectIterator);
     procedure ReleaseOldValueObject;
-    procedure ReleaseThenInsertingObject;
+    procedure ReleaseTheInsertingObject;
+    procedure SetCurrentObject(const NewObject: TObject);
     procedure SetObjectClassName(const Value: String);
     procedure SetObjectType(const Value: TRttiInstanceType);
     procedure UpdateParentObject;
+
+{$IFDEF PAS2JS}
+    procedure GetLazyDisplayText(Sender: TField; var Text: String; DisplayText: Boolean);
+    procedure LoadLazyGetTextFields;
+{$ENDIF}
   protected
     function AllocRecordBuffer: TORMRecordBuffer; override;
     function GetFieldClass(FieldType: TFieldType): TFieldClass; override;
@@ -216,6 +229,9 @@ type
 implementation
 
 uses Delphi.ORM.Nullable, System.Math, Delphi.ORM.Rtti.Helper, Delphi.ORM.Lazy, {$IFDEF PAS2JS}JS{$ELSE}System.SysConst{$ENDIF};
+
+const
+  SELF_FIELD_NAME = 'Self';
 
 { TORMListIterator<T> }
 
@@ -312,6 +328,11 @@ begin
   FCurrentPosition := Value;
 end;
 
+procedure TORMListIterator<T>.SetObject(Index: Cardinal; const Value: TObject);
+begin
+  FList[Pred(Index)] := T(Value);
+end;
+
 procedure TORMListIterator<T>.UpdateArrayProperty(&Property: TRttiProperty; Instance: TObject);
 var
   A: Integer;
@@ -370,6 +391,17 @@ begin
     raise EDataSetWithoutObjectDefinition.Create;
 end;
 
+procedure TORMDataSet.CheckSelfFieldType;
+var
+  Field: TField;
+
+begin
+  Field := FindField(SELF_FIELD_NAME);
+
+  if Assigned(Field) and (Field.DataType <> ftVariant) then
+    raise ESelfFieldTypeWrong.Create('The Self field must be of the variant type!');
+end;
+
 procedure TORMDataSet.ClearCalcFields({$IFDEF PAS2JS}var {$ENDIF}Buffer: TORMCalcFieldBuffer);
 var
   A: Integer;
@@ -424,7 +456,7 @@ destructor TORMDataSet.Destroy;
 begin
   FCalculatedFields.Free;
 
-  ReleaseThenInsertingObject;
+  ReleaseTheInsertingObject;
 
   inherited;
 end;
@@ -527,10 +559,12 @@ var
 begin
   Result := {$IFDEF PAS2JS}NULL{$ELSE}False{$ENDIF};
 
-  if Field.FieldKind = fkData then
+  if IsSelfField(Field) then
+    Value := TValue.From(GetCurrentObject<TObject>)
+  else if Field.FieldKind = fkData then
   begin
     if GetPropertyAndObjectFromField(Field, Value, &Property) then
-      GetPropertyValue(&Property, Value, Value);
+      GetPropertyValue(&Property, Value);
   end
   else if not IsEmpty and (Field.FieldKind = fkCalculated) then
     Value := GetRecordInfoFromActiveBuffer.CalculedFieldBuffer[FCalculatedFields[Field]];
@@ -668,6 +702,77 @@ begin
   Result := GetFieldInfoFromProperty(&Property, Size);
 end;
 
+{$IFDEF PAS2JS}
+type
+  TFieldHack = class(TField)
+  end;
+
+procedure TORMDataSet.GetLazyDisplayText(Sender: TField; var Text: String; DisplayText: Boolean);
+var
+  &Property: TRttiProperty;
+
+  Value: TValue;
+
+  LazyAccess: TLazyAccessType;
+
+  CurrentRecord: Integer;
+
+begin
+  if DisplayText then
+  begin
+    Value := TValue.From(GetCurrentObject<TObject>);
+
+    for &Property in FPropertyMappingList[Sender.Index] do
+      if Value.IsEmpty then
+        Break
+      else
+      begin
+        Value := &Property.GetValue(Value.AsObject);
+
+        if IsLazyLoading(&Property.PropertyType) then
+        begin
+          LazyAccess := GetLazyLoadingAccess(Value);
+
+          if LazyAccess.Loaded then
+            Value := LazyAccess.GetValue
+          else
+          begin
+            CurrentRecord := ActiveRecord;
+            Text := 'Loading....';
+
+            LazyAccess.GetValueAsync._then(
+              function(Value: JSValue): JSValue
+              begin
+                DataEvent(deRecordChange, CurrentRecord);
+              end);
+
+            Exit;
+          end;
+        end;
+      end;
+  end;
+
+  TFieldHack(Sender).GetText(Text, DisplayText);
+end;
+
+procedure TORMDataSet.LoadLazyGetTextFields;
+var
+  Field: TField;
+
+  &Property: TRttiProperty;
+
+begin
+  for Field in Fields do
+    for &Property in FPropertyMappingList[Field.Index] do
+      if IsLazyLoading(&Property.PropertyType) then
+      begin
+        Field.OnGetText := GetLazyDisplayText;
+
+        Break;
+      end;
+end;
+{$ENDIF}
+
 function TORMDataSet.GetObjectAndPropertyFromParentDataSet(var Instance: TValue; var &Property: TRttiProperty): Boolean;
 begin
   Result := Assigned(ParentDataSet) and not ParentDataSet.IsEmpty;
@@ -707,7 +812,7 @@ begin
   for A := Low(PropertyList) to High(PropertyList) do
   begin
     if A > 0 then
-      GetPropertyValue(&Property, Instance, Instance);
+      GetPropertyValue(&Property, Instance);
 
     &Property := PropertyList[A];
 
@@ -716,14 +821,14 @@ begin
   end;
 end;
 
-procedure TORMDataSet.GetPropertyValue(const &Property: TRttiProperty; const Instance: TValue; var Value: TValue);
+procedure TORMDataSet.GetPropertyValue(const &Property: TRttiProperty; var Instance: TValue);
 begin
-  Value := &Property.GetValue(Instance.AsObject);
+  Instance := &Property.GetValue(Instance.AsObject);
 
   if IsNullableType(&Property.PropertyType) then
-    Value := GetNullableAccess(Instance).GetValue
+    Instance := GetNullableAccess(Instance).GetValue
   else if IsLazyLoading(&Property.PropertyType) then
-    Value := GetLazyLoadingAccess(Instance).GetValue;
+    Instance := GetLazyLoadingAccess(Instance).GetValue;
 end;
 
 function TORMDataSet.GetRecNo: Integer;
@@ -805,7 +910,7 @@ begin
     ReleaseOldValueObject;
   end;
 
-  ReleaseThenInsertingObject;
+  ReleaseTheInsertingObject;
 end;
 
 procedure TORMDataSet.InternalClose;
@@ -890,7 +995,13 @@ begin
   if FieldCount = 0 then
     CreateFields;
 
+  CheckSelfFieldType;
+
   LoadPropertiesFromFields;
+
+{$IFDEF PAS2JS}
+  LoadLazyGetTextFields;
+{$ENDIF}
 
   BindFields(True);
 
@@ -925,6 +1036,11 @@ begin
   Result := Assigned(FIterator);
 end;
 
+function TORMDataSet.IsSelfField(Field: TField): Boolean;
+begin
+  Result := Field.FieldName = SELF_FIELD_NAME;
+end;
+
 procedure TORMDataSet.LoadDetailInfo;
 var
   Properties: TArray<TRttiProperty>;
@@ -956,6 +1072,8 @@ begin
 
       FieldDefs.Add(&Property.Name, FieldType, Size);
     end;
+
+  FieldDefs.Add(SELF_FIELD_NAME, ftVariant, 0);
 end;
 
 procedure TORMDataSet.LoadObjectListFromParentDataSet;
@@ -1003,7 +1121,7 @@ begin
   begin
     Field := Fields[A];
 
-    if Field.FieldKind = fkData then
+    if (Field.FieldKind = fkData) and not IsSelfField(Field) then
     begin
       CurrentObjectType := ObjectType;
       &Property := nil;
@@ -1074,7 +1192,7 @@ begin
   FreeAndNil(FOldValueObject);
 end;
 
-procedure TORMDataSet.ReleaseThenInsertingObject;
+procedure TORMDataSet.ReleaseTheInsertingObject;
 begin
   FreeAndNil(FInsertingObject);
 end;
@@ -1084,6 +1202,37 @@ begin
   FIterator.Resync;
 
   inherited;
+end;
+
+procedure TORMDataSet.SetCurrentObject(const NewObject: TObject);
+begin
+  if not Assigned(NewObject) then
+    raise ESelfFieldNotAllowEmptyValue.Create('Empty value isn''t allowed in Self field!')
+  else if NewObject.ClassType <> FObjectType.MetaclassType then
+    raise ESelfFieldDifferentObjectType.Create('Can''t fill the Self field with an object with different type!');
+
+  case State of
+    dsInsert:
+    begin
+      ReleaseTheInsertingObject;
+
+      FInsertingObject := NewObject;
+    end;
+    // dsOldValue: ;
+    // dsInactive: ;
+    // dsBrowse: ;
+    // dsEdit: ;
+    // dsSetKey: ;
+    // dsCalcFields: ;
+    // dsFilter: ;
+    // dsNewValue: ;
+    // dsCurValue: ;
+    // dsBlockRead: ;
+    // dsInternalCalc: ;
+    // dsOpening: ;
+    else
+      FIterator[GetRecordInfoFromActiveBuffer.ArrayPosition] := NewObject;
+  end;
 end;
 
 procedure TORMDataSet.SetDataSetField(const DataSetField: TDataSetField);
@@ -1153,7 +1302,9 @@ begin
       ftVariant: Value := TValue.From({$IFDEF PAS2JS}TObject(Buffer){$ELSE}TObject(PNativeInt(Buffer)^){$ENDIF});
     end;
 
-  if Field.FieldKind = fkData then
+  if IsSelfField(Field) then
+    SetCurrentObject(Value.AsObject)
+  else if Field.FieldKind = fkData then
   begin
     GetPropertyAndObjectFromField(Field, Instance, &Property);
 
