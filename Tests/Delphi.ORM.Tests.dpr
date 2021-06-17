@@ -33,6 +33,7 @@ uses
   Delphi.ORM.Nullable.Test in 'Delphi.ORM.Nullable.Test.pas',
   Delphi.ORM.Lazy in '..\Delphi.ORM.Lazy.pas',
   Delphi.ORM.Lazy.Test in 'Delphi.ORM.Lazy.Test.pas',
+  Delphi.ORM.Cache in '..\Delphi.ORM.Cache.pas',
   Delphi.ORM.Cache.Test in 'Delphi.ORM.Cache.Test.pas';
 
 // Para não remover o valor abaixo
